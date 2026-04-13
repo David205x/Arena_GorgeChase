@@ -1,0 +1,610 @@
+<!doctype html>
+<html lang="zh-CN">
+
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width,initial-scale=1">
+    <title>Gorge Chase</title>
+    <style>
+        :root {
+            --bg: #09111d;
+            --p: #111a28;
+            --p2: #162337;
+            --l: #29405f;
+            --t: #edf5ff;
+            --m: #87a0c4;
+            --path: #243c59;
+            --wall: #0d1420;
+            --hero: #4ade80;
+            --mon: #fb7185;
+            --tre: #fbbf24;
+            --buf: #38bdf8;
+            --flash: #c084fc;
+            --ill: #182334
+        }
+
+        * {
+            box-sizing: border-box
+        }
+
+        html,
+        body {
+            height: 100%
+        }
+
+        body {
+            margin: 0;
+            background: radial-gradient(circle at top, #172740 0%, var(--bg) 60%);
+            color: var(--t);
+            font-family: "Noto Sans SC", "Microsoft YaHei", sans-serif;
+            overflow: hidden
+        }
+
+        .app {
+            height: 100vh;
+            padding: 12px;
+            display: grid;
+            grid-template-columns: minmax(920px, 1.55fr) minmax(520px, .95fr);
+            gap: 12px
+        }
+
+        .panel {
+            min-height: 0;
+            display: flex;
+            flex-direction: column;
+            background: rgba(17, 26, 40, .96);
+            border: 1px solid var(--l);
+            border-radius: 18px;
+            box-shadow: 0 20px 60px rgba(0, 0, 0, .35);
+            overflow: hidden
+        }
+
+        .sec {
+            padding: 12px 14px
+        }
+
+        .top {
+            display: grid;
+            grid-template-columns: 1fr auto;
+            gap: 12px;
+            align-items: start;
+            border-bottom: 1px solid var(--l)
+        }
+
+        h1,
+        h2,
+        h3 {
+            margin: 0
+        }
+
+        p {
+            margin: 4px 0 0;
+            color: var(--m);
+            font-size: 13px
+        }
+
+        .chip {
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            padding: 7px 11px;
+            background: #0a1220;
+            border: 1px solid var(--l);
+            border-radius: 999px;
+            color: var(--m);
+            font-size: 12px;
+            white-space: nowrap
+        }
+
+        .metrics {
+            display: grid;
+            grid-template-columns: repeat(4, 1fr);
+            gap: 8px;
+            border-bottom: 1px solid var(--l)
+        }
+
+        .card {
+            background: var(--p2);
+            border: 1px solid var(--l);
+            border-radius: 12px;
+            padding: 10px
+        }
+
+        .label {
+            color: var(--m);
+            font-size: 11px;
+            letter-spacing: .08em;
+            text-transform: uppercase
+        }
+
+        .value {
+            margin-top: 6px;
+            font-size: 18px;
+            font-weight: 800;
+            line-height: 1.1
+        }
+
+        .maparea {
+            min-height: 0;
+            display: grid;
+            grid-template-columns: 220px minmax(620px, 1fr);
+            gap: 12px;
+            flex: 1
+        }
+
+        .col {
+            min-height: 0;
+            display: flex;
+            flex-direction: column;
+            gap: 10px
+        }
+
+        .board {
+            flex: 1;
+            min-height: 0;
+            display: grid;
+            grid-template-columns: repeat(21, minmax(0, 1fr));
+            gap: 4px;
+            background: #0a1220;
+            border: 1px solid var(--l);
+            border-radius: 16px;
+            padding: 10px;
+            aspect-ratio: 1
+        }
+
+        .cell {
+            aspect-ratio: 1;
+            border-radius: 5px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 10px;
+            font-weight: 800;
+            user-select: none
+        }
+
+        .terrain-0 {
+            background: var(--wall)
+        }
+
+        .terrain-1 {
+            background: var(--path)
+        }
+
+        .entity-hero {
+            background: var(--hero) !important;
+            color: #07210f;
+            outline: 2px solid #d6ffe4
+        }
+
+        .entity-monster {
+            background: var(--mon) !important;
+            color: #3c0612
+        }
+
+        .entity-treasure {
+            background: var(--tre) !important;
+            color: #3e2500
+        }
+
+        .entity-buff {
+            background: var(--buf) !important;
+            color: #032436
+        }
+
+        .legend {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 8px
+        }
+
+        .dot {
+            width: 9px;
+            height: 9px;
+            border-radius: 999px
+        }
+
+        .mini {
+            width: 100%;
+            aspect-ratio: 1;
+            background: #0a1220;
+            border: 1px solid var(--l);
+            border-radius: 14px;
+            image-rendering: pixelated
+        }
+
+        .trail {
+            box-shadow: inset 0 0 0 2px rgba(125, 211, 252, .38)
+        }
+
+        .keyhint {
+            color: var(--m);
+            font-size: 12px;
+            margin-top: 8px
+        }
+
+        .trail.entity-hero {
+            box-shadow: inset 0 0 0 2px rgba(236, 253, 245, .9), 0 0 0 2px rgba(74, 222, 128, .35)
+        }
+
+        .minimeta {
+            display: grid;
+            grid-template-columns: 1fr;
+            gap: 8px
+        }
+
+        .side {
+            min-height: 0;
+            display: grid;
+            grid-template-rows: auto auto auto 1fr auto
+        }
+
+        .shell {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 10px
+        }
+
+        .matrix {
+            background: #0a1220;
+            border: 1px solid var(--l);
+            border-radius: 14px;
+            padding: 10px
+        }
+
+        .mtitle {
+            color: var(--m);
+            font-size: 12px;
+            margin-bottom: 8px
+        }
+
+        .grid {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 6px
+        }
+
+        .btn,
+        .empty {
+            min-height: 54px;
+            border-radius: 12px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            text-align: center
+        }
+
+        .btn {
+            border: 0;
+            cursor: pointer;
+            background: linear-gradient(135deg, #67e8f9, #22c55e);
+            color: #07131e;
+            font-weight: 800;
+            padding: 6px
+        }
+
+        .btn.flash {
+            background: linear-gradient(135deg, #c084fc, #38bdf8)
+        }
+
+        .btn.illegal {
+            background: var(--ill);
+            color: #5f7598;
+            border: 1px solid #2a3d5b
+        }
+
+        .btn .id {
+            display: block;
+            font-size: 11px;
+            opacity: .78
+        }
+
+        .empty {
+            border: 1px dashed #27415f;
+            color: #58718f;
+            font-size: 12px
+        }
+
+        .facts {
+            display: grid;
+            grid-template-columns: repeat(4, 1fr);
+            gap: 8px
+        }
+
+        .lists {
+            min-height: 0;
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 10px
+        }
+
+        .lp {
+            min-height: 0;
+            display: flex;
+            flex-direction: column;
+            gap: 8px
+        }
+
+        .list {
+            min-height: 0;
+            overflow: auto;
+            display: grid;
+            gap: 6px;
+            padding-right: 2px
+        }
+
+        .item {
+            background: #0a1220;
+            border: 1px solid var(--l);
+            border-radius: 10px;
+            padding: 8px 10px;
+            font-size: 12px;
+            line-height: 1.35;
+            color: #d8e8ff
+        }
+
+        .raw {
+            min-height: 84px;
+            max-height: 120px;
+            overflow: auto;
+            white-space: pre-wrap;
+            word-break: break-word;
+            background: #0a1220;
+            border: 1px solid var(--l);
+            border-radius: 12px;
+            padding: 10px;
+            color: #cfe3ff;
+            font-size: 11px;
+            line-height: 1.35
+        }
+
+        @media (max-width:1400px) {
+            .app {
+                grid-template-columns: 1fr;
+                overflow: auto;
+                height: auto
+            }
+
+            body {
+                overflow: auto
+            }
+        }
+    </style>
+</head>
+
+<body>
+    <div class="app">
+        <section class="panel">
+            <div class="sec top">
+                <div>
+                    <h1>峡谷追猎 · GorgeChase</h1>
+                    <p>左侧主图渲染局部 21×21 视野，右侧小地图展示整张地图与当前视野窗口。</p>
+                </div>
+                <div id="mapname" class="chip">地图加载中</div>
+            </div>
+            <div class="sec maparea">
+                <div class="col">
+                    <canvas id="minimap" class="mini" width="256" height="256"></canvas>
+                    <div class="minimeta">
+                        <div class="card">
+                            <div class="label">Episode</div>
+                            <div id="episode" class="value">-</div>
+                        </div>
+                        <div class="card">
+                            <div class="label">Step</div>
+                            <div id="step" class="value">-</div>
+                        </div>
+                        <div class="card">
+                            <div class="label">Reward</div>
+                            <div id="reward" class="value">-</div>
+                        </div>
+                        <div class="card">
+                            <div class="label">Status</div>
+                            <div id="status" class="value">-</div>
+                        </div>
+                        <div class="card">
+                            <div class="label">Hero</div>
+                            <div id="hero-pos" class="value">-</div>
+                        </div>
+                        <div class="card">
+                            <div class="label">Viewport</div>
+                            <div id="viewport" class="value">-</div>
+                        </div>
+                    </div>
+                </div>
+                <div class="col">
+                    <div id="map" class="board"></div>
+                    <div class="legend"><span class="chip"><span class="dot"
+                                style="background:#243c59"></span>可通行</span><span class="chip"><span class="dot"
+                                style="background:#0d1420"></span>障碍</span><span class="chip"><span class="dot"
+                                style="background:#4ade80"></span>英雄</span><span class="chip"><span class="dot"
+                                style="background:#fb7185"></span>怪物</span><span class="chip"><span class="dot"
+                                style="background:#fbbf24"></span>宝箱</span><span class="chip"><span class="dot"
+                                style="background:#38bdf8"></span>Buff</span></div>
+                </div>
+            </div>
+        </section>
+        <aside class="panel side">
+            <div class="sec">
+                <h2>动作面板</h2>
+                <div class="keyhint">键盘映射：仅普通移动支持小键盘 1-9，5 保留为空。</div>
+            </div>
+            <div class="sec shell" id="action-shell"></div>
+            <div class="sec">
+                <h3>关键信息</h3>
+                <div id="facts" class="facts" style="margin-top:8px"></div>
+            </div>
+            <div class="sec lists">
+                <div class="lp">
+                    <h3>怪物</h3>
+                    <div id="monsters" class="list"></div>
+                </div>
+                <div class="lp">
+                    <h3>视野物件</h3>
+                    <div id="organs" class="list"></div>
+                </div>
+            </div>
+            <div class="sec">
+                <h3>obs 预览</h3>
+                <pre id="raw" class="raw"></pre>
+            </div>
+        </aside>
+    </div>
+    <script>
+    const ACTION_GROUPS = __ACTION_GROUPS__; 
+    const KEYPAD_TO_ACTION = { '1': 5, '2': 6, '3': 7, '4': 4, '6': 0, '7': 3, '8': 2, '9': 1 }; 
+    const $ = id => document.getElementById(id), fact = (l, v) => 
+        `<div class="card">
+            <div class="label">${l}</div>
+            <div class="value">${v ?? '-'}</div>
+        </div>`; 
+    function buildActionPanel() { 
+        const s = $('action-shell'); 
+        s.innerHTML = ''; 
+        ACTION_GROUPS.forEach(g => { 
+            const p = document.createElement('div'); 
+            p.className = 'matrix'; 
+            p.innerHTML = `<div class="mtitle">${g.title}</div>`; 
+            const grid = document.createElement('div'); 
+            grid.className = 'grid'; 
+            g.slots.forEach(slot => { 
+                if (!slot) { 
+                    const e = document.createElement('div'); 
+                    e.className = 'empty'; 
+                    e.textContent = '中心'; 
+                    grid.appendChild(e); 
+                    return 
+                } 
+                const b = document.createElement('button'); 
+                b.className = `btn ${g.kind}`; 
+                b.dataset.actionId = slot.id; 
+                b.innerHTML = `<span>${slot.arrow}<br>${slot.name}<span class="id">#${slot.id}</span></span>`; 
+                b.onclick = () => submitAction(slot.id); 
+                grid.appendChild(b) }
+            ); 
+            p.appendChild(grid); 
+            s.appendChild(p) 
+        }) 
+    } 
+    function renderLocalMap(m) { 
+        const root = $('map'); 
+        root.innerHTML = ''; 
+        (m || []).forEach(r => r.forEach(c => { 
+            const e = document.createElement('div'); 
+            e.className = `cell terrain-${c.terrain}${c.trail ? ' trail' : ''}${c.entity ? ` entity-${c.entity}` : ''}`; 
+            e.textContent = c.label || ''; 
+            root.appendChild(e) 
+        })) 
+    } 
+    function renderMinimap(m) { 
+        const canvas = $('minimap'), ctx = canvas.getContext('2d'); 
+        ctx.clearRect(0, 0, canvas.width, canvas.height); 
+        if (!m || !m.cells) return; 
+        const rows = m.cells.length, cols = rows ? m.cells[0].length : 0; 
+        if (!rows || !cols) return; 
+        const cw = canvas.width / cols, ch = canvas.height / rows; 
+        for (let z = 0; z < rows; z++) for (let x = 0; x < cols; x++) { 
+            ctx.fillStyle = m.cells[z][x] === 1 ? '#223b58' : '#0c1522'; 
+            ctx.fillRect(x * cw, z * ch, Math.ceil(cw), Math.ceil(ch)) 
+        } 
+        (m.explored || []).forEach(p => { 
+            ctx.strokeStyle = 'rgba(255,255,255,0.18)'; 
+            ctx.lineWidth = 1; 
+            ctx.strokeRect(p.x * cw + 0.5, p.z * ch + 0.5, Math.max(cw - 1, 1), Math.max(ch - 1, 1));
+        });
+        (m.trail || []).forEach(p => { 
+            ctx.fillStyle = 'rgba(125, 211, 252, 0.45)'; 
+            ctx.fillRect(p.x * cw, p.z * ch, Math.max(cw, 1), Math.max(ch, 1));
+        });
+        const box = m.viewport || {}; 
+        ctx.strokeStyle = '#f8fafc'; 
+        ctx.lineWidth = 2; 
+        ctx.strokeRect(box.x * cw, box.z * ch, Math.max(box.w * cw, 2), Math.max(box.h * ch, 2)); 
+        const hero = m.hero || {}; 
+        ctx.fillStyle = '#4ade80'; 
+        ctx.beginPath(); 
+        ctx.arc((hero.x + .5) * cw, (hero.z + .5) * ch, Math.max(Math.min(cw, ch) * 1.2, 2), 0, Math.PI * 2); 
+        ctx.fill(); 
+        $('hero-pos').textContent = `${hero.x ?? '-'}, ${hero.z ?? '-'}`; 
+        $('viewport').textContent = `${box.x ?? '-'},${box.z ?? '-'} · ${box.w ?? '-'}×${box.h ?? '-'}` 
+        } 
+        function renderLists(ui) { 
+            $('monsters').innerHTML = (ui.monsters || []).map((m, i) => 
+                `<div class="item">
+                    M${i + 1} · in_view=${m.is_in_view} · speed=${m.speed} · (${m.pos?.x}, ${m.pos?.z})
+                </div>`).join('') || '<div class="item">暂无怪物信息</div>'; 
+            $('organs').innerHTML = (ui.visible_organs || []).map(o => 
+                `<div class="item">
+                    ${o.sub_type === 1 ? '宝箱' : 'Buff'} #${o.config_id} · status=${o.status} · (${o.pos?.x}, ${o.pos?.z})
+                </div>`
+            ).join('') || '<div class="item">当前视野内无物件</div>' 
+        } 
+        function renderFacts(ui) { 
+            const s = ui.summary || {}, h = ui.hero || {}, m = ui.map_meta || {}; 
+            $('facts').innerHTML = [
+                fact('地图', m.map_id), 
+                fact('总分', s.total_score), 
+                fact('步数', `${s.step_no ?? '-'} / ${s.max_step ?? '-'}`), 
+                fact('宝箱', `${s.treasures_collected ?? 0} / ${s.total_treasure ?? '-'}`), 
+                fact('Buff', `${s.collected_buff ?? 0} / ${s.total_buff ?? '-'}`), 
+                fact('闪现次数', s.flash_count), 
+                fact('闪现冷却', h.flash_cooldown), 
+                fact('Buff剩余', h.buff_remaining_time), 
+                fact('step_score', s.step_score), 
+                fact('treasure_score', s.treasure_score), 
+                fact('result_code', s.result_code), 
+                fact('result_message', s.result_message)].join('') 
+        } 
+        function updateLegal(legal) { 
+            document.querySelectorAll('.btn').forEach(b => { 
+                const id = Number(b.dataset.actionId); 
+                b.classList.toggle('illegal', legal[id] === false) 
+            }) 
+        } 
+        function render(state) { 
+            const ui = state.ui || {}, m = ui.map_meta || {}; 
+            $('episode').textContent = state.episode; 
+            $('step').textContent = state.step; 
+            $('reward').textContent = state.last_reward; 
+            $('status').textContent = state.done ? `done · ${state.status}` : state.status; 
+            $('mapname').textContent = m.name ? `${m.name} · ${m.width}×${m.height}` : '地图信息缺失'; 
+            renderLocalMap(ui.local_map); 
+            renderMinimap(ui.minimap); 
+            renderFacts(ui); 
+            renderLists(ui); 
+            updateLegal(ui.legal_action || []); 
+            $('raw').textContent = ui.raw_preview || '' 
+        } 
+        async function fetchState() { 
+            const r = await fetch('/state'); 
+            render(await r.json()) 
+        } 
+        async function submitAction(action) { 
+            const body = new URLSearchParams(); 
+            body.set('action', action); 
+            const r = await fetch('/action', {
+                 method: 'POST', 
+                 headers: { 'Content-Type': 'application/x-www-form-urlencoded;charset=UTF-8' }, 
+                 body: body.toString() 
+            }); 
+            const d = await r.json(); 
+            if (!r.ok) return alert(d.error || '提交失败'); 
+            render(d.state) 
+        } 
+        document.addEventListener('keydown', (event) => {
+            if (event.repeat || event.ctrlKey || event.metaKey || event.altKey) return;
+            const target = event.target;
+            if (target && ['INPUT', 'TEXTAREA', 'SELECT'].includes(target.tagName)) return;
+            const key = event.key;
+            if (!(key in KEYPAD_TO_ACTION)) return;
+            event.preventDefault();
+            submitAction(KEYPAD_TO_ACTION[key]);
+        });
+        
+        buildActionPanel(); 
+        fetchState(); 
+        setInterval(fetchState, 1000);
+    </script>
+</body>
+
+</html>
