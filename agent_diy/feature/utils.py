@@ -36,7 +36,7 @@ def predict_flash_pos(map_view: np.ndarray, x: int, z: int) -> list[tuple[int, i
         return bool(map_view[nz, nx] == 1)
 
     out: list[tuple[int, int]] = []
-    for dx, dz in _FLASH_DIR_VEC:
+    for dx, dz in FLASH_DIR_VEC:
         is_diagonal = dx != 0 and dz != 0
         max_step = FLASH_DISTANCE_DIAGONAL if is_diagonal else FLASH_DISTANCE
         landed: tuple[int, int] | None = None

@@ -12,7 +12,7 @@ FLASH_DISTANCE_DIAGONAL = 8
 POS_HISTORY_LEN = 10
 
 
-_FLASH_DIR_VEC: list[tuple[int, int]] = [
+FLASH_DIR_VEC: list[tuple[int, int]] = [
     (1, 0),
     (1, -1),
     (0, -1),
@@ -24,7 +24,7 @@ _FLASH_DIR_VEC: list[tuple[int, int]] = [
 ]
 """[右, 右上, 上, 左上, 左, 左下, 下, 右下]"""
 
-_MOVE_DIR_VEC: list[tuple[int, int]] = [
+MOVE_DIR_VEC: list[tuple[int, int]] = [
     (1, 0),
     (1, -1),
     (0, -1),
@@ -35,3 +35,9 @@ _MOVE_DIR_VEC: list[tuple[int, int]] = [
     (1, 1),
 ]
 """与移动 8 方向保持一致"""
+
+ALPHA_MAP = {
+    1: 0.25,
+    2: 0.60,
+    3: 0.90,
+}

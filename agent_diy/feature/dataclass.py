@@ -1,8 +1,24 @@
 from __future__ import annotations
 import numpy as np
 from dataclasses import dataclass, field
+from typing import Any
 
 from .constant import *
+
+
+def direction_to_vector(direction: int) -> tuple[int, int]:
+    direction_map = {
+        0: (0, 0),
+        1: (1, 0),
+        2: (1, -1),
+        3: (0, -1),
+        4: (-1, -1),
+        5: (-1, 0),
+        6: (-1, 1),
+        7: (0, 1),
+        8: (1, 1),
+    }
+    return direction_map.get(int(direction), (0, 0))
 
 
 @dataclass(slots=True)
@@ -16,14 +32,22 @@ class Character:
     """
     与英雄的欧氏距离桶编号 (0-5), 来自环境原始字段。
     """
-    hero_relative_direction: int = 0
+    hero_relative_direction: tuple[int, int] = (0, 0)
     """
-    相对于英雄的方位 (0-8), 来自环境原始字段。
+    相对于英雄的方位方向向量, 由环境原始方向编号 (0-8) 转换而来。
     """
 
     @classmethod
-    def from_env(cls, obs: dict) -> Character:
-        raise NotImplementedError
+    def from_env(cls, obs: dict[str, Any]) -> Character:
+        pos = obs["pos"]
+        entity_id = int(obs.get("hero_id", 0) or obs.get("monster_id", 0) or obs.get("config_id", 0))
+        return cls(
+            id=entity_id,
+            x=int(pos["x"]),
+            z=int(pos["z"]),
+            hero_l2_distance=int(obs.get("hero_l2_distance", 0)),
+            hero_relative_direction=direction_to_vector(int(obs.get("hero_relative_direction", 0))),
+        )
 
 
 @dataclass(slots=True)
@@ -36,8 +60,17 @@ class Hero(Character):
         return self.flash_cooldown == 0
 
     @classmethod
-    def from_env(cls, obs: dict) -> Hero:
-        raise NotImplementedError
+    def from_env(cls, obs: dict[str, Any]) -> Hero:
+        base = Character.from_env(obs)
+        return cls(
+            id=base.id,
+            x=base.x,
+            z=base.z,
+            hero_l2_distance=base.hero_l2_distance,
+            hero_relative_direction=base.hero_relative_direction,
+            buff_remaining_time=int(obs["buff_remaining_time"]),
+            flash_cooldown=int(obs["flash_cooldown"]),
+        )
 
 
 @dataclass(slots=True)
@@ -47,8 +80,18 @@ class Monster(Character):
     is_in_view: bool = False
 
     @classmethod
-    def from_env(cls, obs: dict) -> Monster:
-        raise NotImplementedError
+    def from_env(cls, obs: dict[str, Any]) -> Monster:
+        base = Character.from_env(obs)
+        return cls(
+            id=base.id,
+            x=base.x,
+            z=base.z,
+            hero_l2_distance=base.hero_l2_distance,
+            hero_relative_direction=base.hero_relative_direction,
+            monster_interval=int(obs["monster_interval"]),
+            speed=int(obs["speed"]),
+            is_in_view=bool(obs["is_in_view"]),
+        )
 
 
 @dataclass(slots=True)
@@ -73,8 +116,18 @@ class Organ(Character):
         return self.sub_type == 2
 
     @classmethod
-    def from_env(cls, obs: dict) -> Organ:
-        raise NotImplementedError
+    def from_env(cls, obs: dict[str, Any]) -> Organ:
+        base = Character.from_env(obs)
+        return cls(
+            id=base.id,
+            x=base.x,
+            z=base.z,
+            hero_l2_distance=base.hero_l2_distance,
+            hero_relative_direction=base.hero_relative_direction,
+            status=int(obs["status"]),
+            sub_type=int(obs["sub_type"]),
+            cooldown=0,
+        )
 
 
 @dataclass(slots=True)
@@ -108,8 +161,38 @@ class RawObs:
     total_treasure: int
 
     @classmethod
-    def from_env(cls, env_obs: dict) -> RawObs:
-        raise NotImplementedError
+    def from_env(cls, env_obs: dict[str, Any]) -> RawObs:
+        frame_state = env_obs["frame_state"]
+        env_info = env_obs["env_info"]
+        organs = frame_state["organs"]
+
+        treasures = [Organ.from_env(d) for d in organs if int(d["sub_type"]) == 1]
+        buffs = [Organ.from_env(d) for d in organs if int(d["sub_type"]) == 2]
+
+        return cls(
+            step=int(env_obs["step_no"]),
+            legal_action=[bool(v) for v in env_obs["legal_action"]],
+            map_view=np.asarray(env_obs["map_info"], dtype=np.int8),
+            hero=Hero.from_env(frame_state["heroes"]),
+            monsters=[Monster.from_env(d) for d in frame_state["monsters"]],
+            treasures=treasures,
+            buffs=buffs,
+            treasure_id=[int(i) for i in env_info["treasure_id"]],
+            collected_buff=int(env_info["collected_buff"]),
+            flash_count=int(env_info["flash_count"]),
+            step_score=float(env_info["step_score"]),
+            total_score=float(env_info["total_score"]),
+            treasure_score=float(env_info["treasure_score"]),
+            treasures_collected=int(env_info["treasures_collected"]),
+            buff_refresh_time=int(env_info["buff_refresh_time"]),
+            flash_cooldown_max=int(env_info["flash_cooldown_max"]),
+            max_step=int(env_info["max_step"]),
+            monster_init_speed=int(env_info["monster_init_speed"]),
+            monster_interval=int(env_info["monster_interval"]),
+            monster_speed_boost_step=int(env_info["monster_speed_boost_step"]),
+            total_buff=int(env_info["total_buff"]),
+            total_treasure=int(env_info["total_treasure"]),
+        )
 
 
 @dataclass(slots=True)
@@ -200,7 +283,14 @@ class LocalMapLayers:
     visit: np.ndarray = field(default_factory=lambda: np.zeros((VIEW_SIZE, VIEW_SIZE), dtype=np.float32))
 
     def as_stack(self) -> np.ndarray:
-        raise NotImplementedError
+        return np.stack([
+            self.obstacle,
+            self.hero,
+            self.monster,
+            self.treasure,
+            self.buff,
+            self.visit,
+        ], axis=0,)
 
 
 @dataclass(slots=True)

@@ -5,7 +5,7 @@ from typing import Deque
 
 from .dataclass import *
 from .constant import *
-from .utils import build_local_window, is_pos_neighbor
+from .utils import *
 
 
 class Extractor:
@@ -15,7 +15,7 @@ class Extractor:
         self.current_extra: ExtractorSnapshot = ExtractorSnapshot()
         self.previous: ExtractorSnapshot = ExtractorSnapshot()
         # ========== map cache
-        self.map_id: int
+        self.map_id: int = -1
         self.map_full: np.ndarray = np.full((MAP_SIZE, MAP_SIZE), -1, dtype=np.int8)
         """-1=未探索, 0=已探索不可通行, 1=已探索可通行"""
         self.visit_count: np.ndarray = np.zeros((MAP_SIZE, MAP_SIZE), dtype=np.int32)
@@ -31,14 +31,7 @@ class Extractor:
         self.truncated: bool = False
 
     def reset(self) -> None:
-        """
-        重置 extractor 的全部跨步状态与缓存。
-        - 在每局开始前调用，与环境 `reset()` 保持同步。
-        功能：
-        - 清空 `current` / `previous` 快照。
-        - 清空全局地图缓存、访问计数、资源缓存、历史轨迹。
-        - 恢复 `initialized`、`terminated`、`truncated` 等生命周期状态。
-        """
+        """在每局开始前调用"""
         self.current = ExtractorSnapshot()
         self.current_extra = ExtractorSnapshot()
         self.previous = ExtractorSnapshot()
@@ -59,91 +52,42 @@ class Extractor:
         terminated: bool = False,
         truncated: bool = False
     ) -> ExtractorSnapshot:
-        """
-        单步更新 extractor 主状态。
-
-        调用顺序建议：
-        1. 构造 RawObs
-        2. 滚动 previous/current
-        3. 更新地图缓存、访问缓存、资源缓存
-        4. 更新阶段信息、对象摘要、空间统计、动作反馈
-        5. 返回 current snapshot
-        """
-        raw = self.build_raw_obs(env_obs)
+        """单步更新 extractor 主状态"""
+        
         self.terminated = terminated
         self.truncated = truncated
-        self.roll_snapshots(raw)
+        
+        raw = RawObs.from_env(env_obs)
+        # ===== update step
+        self.previous = self.current
+        self.current = ExtractorSnapshot(raw=raw)
+
+        # 2) 更新各类缓存
         self.init_resource_cache(raw)
         self.update_map_full(raw)
         self.update_visit_count(raw)
         self.update_pos_history()
         self.update_treasure_cache(raw)
         self.update_buff_cache(raw)
+        # 3) 计算基础派生信息
+        self.current.hero_speed = self.compute_hero_speed()
+        self.current.map_explore_rate, self.current.map_new_discover = self.compute_map_statistics()
+        # 4) 先计算不依赖 action_feedback 的摘要
+        self.current.monster_summary = self.compute_monster_summary()
+        self.current.resource_summary = self.compute_resource_summary()
+        self.current.stage_info = self.compute_stage_info()
+        self.current.local_map_layers = self.compute_local_map_layers()
+        # 5) 动作结果 / 动作反馈
+        self.current.action_result = self.compute_action_result()
+        self.current.action_feedback = self.compute_action_feedback()
+        # 6) 空间信息（若当前实现已完成）
+        self.current.space_summary = self.compute_space_summary()
         self.initialized = True
         return self.current
 
-    # ==================== raw / lifecycle ====================
-    def build_raw_obs(self, env_obs: dict) -> RawObs:
-        """
-        将单帧环境观测解包为 `RawObs`。
-
-        使用场景：
-        - `update()` 的最开始阶段。
-        - 需要把原始环境字典统一转换成 extractor 内部标准结构时。
-
-        功能：
-        - 读取 `step`、`legal_action`、`map_view`、英雄、怪物、资源与统计字段。
-        - 仅做“忠实映射”的原始封装，不做跨步比较，不更新缓存。
-
-        输入：
-        - `env_obs`: 单帧 observation 字典，结构应与环境返回的 `observation` 一致。
-
-        输出：
-        - `RawObs`: 当前帧的原始结构化观测对象。
-        """
-        return RawObs.from_env(env_obs)
-
-    def roll_snapshots(self, raw: RawObs) -> None:
-        """
-        将 extractor 的当前快照滚动为上一帧，并为当前帧准备新的快照容器。
-
-        使用场景：
-        - `build_raw_obs()` 之后、各类缓存更新和派生计算之前。
-        - 所有依赖“当前帧 vs 上一帧”的逻辑前置步骤。
-
-        功能：
-        - 将旧的 `current` 迁移到 `previous`。
-        - 基于本帧 `raw` 初始化新的 `current` 基础状态。
-        - 为奖励增量、动作反馈、地图增量等跨步逻辑提供统一时间线。
-
-        输入：
-        - `raw`: 当前帧的 `RawObs`。
-
-        输出：
-        - 无返回值，直接更新 `self.current` 与 `self.previous`。
-        """
-        self.previous = self.current
-        self.current = ExtractorSnapshot(raw=raw)
-
-    # ==================== cache update ====================
+    # ======================================== cache update
     def init_resource_cache(self, raw: RawObs) -> None:
-        """
-        按当前环境配置初始化资源缓存容器。
-
-        使用场景：
-        - 通常在首帧更新时调用。
-        - 当 `treasure_full` / `buff_full` 还未根据总资源数量建立结构时调用。
-
-        功能：
-        - 根据 `raw.total_treasure` 和 `raw.total_buff` 创建资源缓存。
-        - 为后续“发现 / 未发现 / 已收集 / 冷却中”的状态维护提供存储空间。
-
-        输入：
-        - `raw`: 当前帧原始观测，主要提供资源总量配置。
-
-        输出：
-        - 无返回值，直接更新 extractor 内部资源缓存结构。
-        """
+        """按当前环境配置初始化资源缓存容器"""
         if not self.treasure_full:
             self.treasure_full = [None] * raw.total_treasure
         if not self.buff_full:
@@ -151,23 +95,8 @@ class Extractor:
 
     def update_map_full(self, raw: RawObs) -> None:
         """
-        将当前 21×21 局部视野写回全局地图缓存 `map_full`。
-
-        使用场景：
-        - 每帧更新时调用。
-        - 当 `obs` / `reward` 需要使用历史探索信息、全局已知地图时调用前置。
-
-        功能：
-        - 根据英雄当前位置，将 `raw.map_view` 对齐写入全局坐标系。
-        - 维护“未探索 / 已探索可通行 / 已探索不可通行”的地图状态。
-
-        输入：
-        - `raw`: 当前帧原始观测，至少需要英雄坐标与局部地图。
-
-        输出：
-        - 无返回值，直接更新 `self.map_full`。
+        将当前 21×21 局部视野写回全局地图缓存 `map_full`
         """
-        self.map_full = build_local_window(self.map_full, raw.hero.x, raw.hero.z)
         x_min = raw.hero.x - VIEW_CENTER
         x_max = raw.hero.x + VIEW_CENTER + 1
         z_min = raw.hero.z - VIEW_CENTER
@@ -189,67 +118,17 @@ class Extractor:
         ]
 
     def update_visit_count(self, raw: RawObs) -> None:
-        """
-        更新英雄位置访问计数。
-
-        使用场景：
-        - 每帧更新时调用。
-        - 当 reward 需要评估低效移动、重复绕路，或 obs 需要构造 visit 通道时使用。
-
-        功能：
-        - 对当前英雄所在格子的访问次数加一。
-        - 为局部访问热度、历史访问分布等派生信息提供底层数据。
-
-        输入：
-        - `raw`: 当前帧原始观测，主要使用英雄绝对坐标。
-
-        输出：
-        - 无返回值，直接更新 `self.visit_count`。
-        """
+        """更新英雄位置访问计数"""
         self.visit_count[raw.hero.z, raw.hero.x] += 1
 
     def update_pos_history(self) -> None:
-        """
-        维护英雄历史位置轨迹缓存。
-
-        使用场景：
-        - 在当前帧与上一帧快照均已就绪后调用。
-        - 当需要支持怪物追踪分析、路径重复检测、低效移动判定时使用。
-
-        功能：
-        - 将上一帧英雄位置写入 `pos_history`。
-        - 保持固定长度的时间窗口轨迹，供后续空间与行为分析复用。
-
-        输入：
-        - 无显式参数，内部依赖 `self.previous` / `self.current`。
-
-        输出：
-        - 无返回值，直接更新 `self.pos_history`。
-        """
         if self.previous.raw is None:
             return
         hero = self.previous.raw.hero
         self.pos_history.append((hero.x, hero.z))
 
     def update_treasure_cache(self, raw: RawObs) -> None:
-        """
-        更新已知宝箱的全局缓存状态。
-
-        使用场景：
-        - 每帧更新资源信息时调用。
-        - 当 obs / reward 需要基于“历史已知宝箱”而非“当前可见宝箱”做判断时使用。
-
-        功能：
-        - 将当前视野内宝箱写入 `treasure_full`。
-        - 结合 `raw.treasure_id` 维护宝箱的发现、未收集、已收集状态。
-        - 为最近已知宝箱、宝箱发现进度、宝箱收集进度提供底层缓存。
-
-        输入：
-        - `raw`: 当前帧原始观测，包含当前可见宝箱与剩余宝箱 id 列表。
-
-        输出：
-        - 无返回值，直接更新 `self.treasure_full`。
-        """
+        """更新已知宝箱的全局缓存状态"""
         for treasure in raw.treasures:
             self.treasure_full[treasure.id] = treasure
 
@@ -260,24 +139,7 @@ class Extractor:
                 treasure.status = 0
 
     def update_buff_cache(self, raw: RawObs) -> None:
-        """
-        更新已知 buff 点的全局缓存状态。
-
-        使用场景：
-        - 每帧更新资源信息时调用。
-        - 当 reward 需要识别 buff 获取事件，或 obs 需要查询最近已知 buff 时使用。
-
-        功能：
-        - 将当前视野内 buff 写入 `buff_full`。
-        - 基于历史记录与环境规则维护 buff 是否可获取、是否处于 cooldown。
-        - 为最近已知 buff、buff 发现进度、buff 刷新状态提供统一缓存来源。
-
-        输入：
-        - `raw`: 当前帧原始观测，包含当前可见 buff 与 buff 相关统计字段。
-
-        输出：
-        - 无返回值，直接更新 `self.buff_full`。
-        """
+        """更新已知 buff 点的全局缓存状态"""
         for buff in raw.buffs:
             self.buff_full[buff.id] = buff
 
@@ -288,431 +150,646 @@ class Extractor:
                 buff.cooldown = raw.buff_refresh_time
             buff.cooldown = max(buff.cooldown - 1, 0)
 
-    # ==================== derived summaries ====================
+    # ======================================== derived summaries
     def compute_hero_speed(self) -> int:
         """
         计算英雄当前帧的等效速度。
-
-        使用场景：
-        - 更新当前帧快照的基础派生信息时调用。
-        - 当 obs / reward 需要区分普通状态与 buff 加速状态时使用。
-
-        功能：
-        - 根据英雄 buff 持续时间与环境规则，推导当前每步移动能力。
-        - 为动作质量分析、怪物压力评估与空间估计提供基础量。
-
-        输入：
-        - 无显式参数，内部通常读取 `self.current.raw.hero`。
-
-        输出：
-        - `int`: 当前英雄速度。
         """
-        raise NotImplementedError
+        raw = self.current.raw
+        if raw is None:
+            return 1
+        return 2 if raw.hero.buff_remaining_time > 0 else 1
 
     def compute_map_statistics(self) -> tuple[float, int]:
         """
         统计当前全局地图缓存的探索进度与本步新增探索量。
-
-        使用场景：
-        - 每帧地图缓存更新后调用。
-        - 当 obs 需要地图探索程度、reward 需要探索增量 shaping 时使用。
-
-        功能：
-        - 计算当前已探索格子占全图的比例。
-        - 对比上一帧统计量，得到本步新探索格数。
-
-        输入：
-        - 无显式参数，内部依赖 `self.map_full` 以及前一帧快照统计值。
-
-        输出：
-        - `tuple[float, int]`: `(map_explore_rate, map_new_discover)`。
         """
-        raise NotImplementedError
+        explored_count = int(np.count_nonzero(self.map_full != -1))
+        map_explore_rate = explored_count / float(MAP_SIZE * MAP_SIZE)
+        previous_rate = self.previous.map_explore_rate if self.previous is not None else 0.0
+        previous_explored_count = int(round(previous_rate * MAP_SIZE * MAP_SIZE))
+        map_new_discover = max(0, explored_count - previous_explored_count)
+        return map_explore_rate, map_new_discover
 
     def compute_reward_delta(self) -> RewardDelta:
-        """
-        汇总当前帧相对于上一帧的环境得分增量。
-
-        使用场景：
-        - reward 相关状态更新时调用。
-        - 当需要统一访问总分、步数分、宝箱分、资源获取次数等跨步增量时使用。
-
-        功能：
-        - 比较当前帧与上一帧的分数和统计字段。
-        - 生成 `RewardDelta`，供动作反馈和 reward 导出复用。
-
-        输入：
-        - 无显式参数，内部依赖 `self.current.raw` 与 `self.previous.raw`。
-
-        输出：
-        - `RewardDelta`: 当前帧相对上一帧的环境增量摘要。
-        """
-        raise NotImplementedError
+        current = self.current.raw
+        previous = self.previous.raw
+        if current is None:
+            return RewardDelta()
+        if previous is None:
+            return RewardDelta(
+                total_score_delta=current.total_score,
+                step_score_delta=current.step_score,
+                treasure_score_delta=current.treasure_score,
+                treasures_collected_delta=current.treasures_collected,
+                collected_buff_delta=current.collected_buff,
+                flash_count_delta=current.flash_count,
+            )
+        return RewardDelta(
+            total_score_delta=current.total_score - previous.total_score,
+            step_score_delta=current.step_score - previous.step_score,
+            treasure_score_delta=current.treasure_score - previous.treasure_score,
+            treasures_collected_delta=current.treasures_collected - previous.treasures_collected,
+            collected_buff_delta=current.collected_buff - previous.collected_buff,
+            flash_count_delta=current.flash_count - previous.flash_count,
+        )
 
     def compute_action_feedback(self) -> ActionFeedback:
         """
         计算上一动作在当前帧体现出的结果反馈。
-
-        使用场景：
-        - 每帧派生动作后果时调用。
-        - 当 obs 需要历史行为反馈、reward 需要动作质量 shaping 时使用。
-
-        功能：
-        - 判断是否发生有效移动。
-        - 判断最近怪距离是否增加、是否拾取资源、是否带来新探索。
-        - 汇总与动作结果强相关的环境反馈信号。
-
-        输入：
-        - 无显式参数，内部依赖当前帧与上一帧快照及 `RewardDelta`。
-
-        输出：
-        - `ActionFeedback`: 当前帧对上一动作的结构化反馈结果。
         """
-        raise NotImplementedError
+        current = self.current.raw
+        previous = self.previous.raw
+        reward_delta = self.compute_reward_delta()
+
+        if current is None or previous is None:
+            return ActionFeedback(reward_delta=reward_delta)
+
+        moved = (current.hero.x != previous.hero.x) or (current.hero.z != previous.hero.z)
+
+        nearest_current = self.current.monster_summary.nearest_monster_distance
+        nearest_last = self.previous.monster_summary.nearest_monster_distance
+        nearest_monster_distance_increased = False
+        if nearest_current is not None and nearest_last is not None:
+            nearest_monster_distance_increased = nearest_current > nearest_last
+
+        picked_treasure = reward_delta.treasures_collected_delta > 0
+        picked_buff = reward_delta.collected_buff_delta > 0
+
+        return ActionFeedback(
+            moved=moved,
+            moved_effectively=moved,    # TODO
+            nearest_monster_distance_increased=nearest_monster_distance_increased,
+            picked_treasure=picked_treasure,
+            picked_buff=picked_buff,
+            gained_resource=(picked_treasure or picked_buff),
+            explored_new_area=self.current.map_new_discover > 0,
+            reward_delta=reward_delta,
+        )
 
     def compute_action_result(self) -> ActionResult:
-        """
-        计算当前帧面向下一步决策的动作结果摘要。
+        """计算当前帧面向下一步决策的动作结果摘要。"""
+        move_valid_mask = self.get_move_valid_mask()
+        flash_result = self.get_flash_result()
 
-        使用场景：
-        - obs 构造前调用。
-        - 当策略或规则逻辑需要查询普通移动合法性、闪现落点与动作先验时使用。
-
-        功能：
-        - 生成普通移动 8 方向可行性。
-        - 生成闪现 8 方向落点、相对位移、有效性与位移长度。
-        - 维护当前局面下的基础动作偏好信息。
-
-        输入：
-        - 无显式参数，内部依赖当前帧局部地图、英雄位置与动作规则。
-
-        输出：
-        - `ActionResult`: 面向下一步动作选择的结构化结果。
-        """
-        raise NotImplementedError
+        return ActionResult(
+            move_valid_mask=move_valid_mask,
+            flash_pos=flash_result.flash_pos,
+            flash_pos_relative=flash_result.flash_pos_relative,
+            flash_valid_mask=flash_result.flash_valid_mask,
+            flash_distance=flash_result.flash_distance,
+            action_preferred=move_valid_mask + flash_result.flash_valid_mask, #TODO
+        )
 
     def compute_monster_summary(self) -> MonsterSummary:
-        """
-        汇总当前帧怪物压力相关的基础摘要。
+        nearest_monster, second_monster = self.get_nearest_monsters()
+        nearest_distance = None
+        second_distance = None
+        average_distance = None
+        hero = self.current.raw.hero if self.current.raw is not None else None
 
-        使用场景：
-        - 每帧派生怪物信息时调用。
-        - 当 obs / reward 需要最近怪物、第二怪物、距离变化等统一入口时使用。
+        if hero is not None and nearest_monster is not None:
+            nearest_distance = chebyshev_distance(hero.x, hero.z, nearest_monster.x, nearest_monster.z)
+        if hero is not None and second_monster is not None:
+            second_distance = chebyshev_distance(hero.x, hero.z, second_monster.x, second_monster.z)
 
-        功能：
-        - 统计怪物数量。
-        - 识别最近怪物与第二怪物，并计算对应距离。
-        - 生成与上一帧比较所需的基础压力量。
+        distances = [d for d in [nearest_distance, second_distance] if d is not None]
+        if distances:
+            average_distance = float(sum(distances)) / len(distances)
 
-        输入：
-        - 无显式参数，内部依赖当前帧和上一帧怪物状态。
+        last_summary = self.previous.monster_summary
+        nearest_distance_last = last_summary.nearest_monster_distance
+        nearest_distance_delta = None
+        if nearest_distance is not None and nearest_distance_last is not None:
+            nearest_distance_delta = nearest_distance - nearest_distance_last
 
-        输出：
-        - `MonsterSummary`: 当前帧怪物压力摘要。
-        """
-        raise NotImplementedError
+        monster_count = len(self.current.raw.monsters) if self.current.raw is not None else 0
+        return MonsterSummary(
+            monster_count=monster_count,
+            nearest_monster=nearest_monster,
+            second_monster=second_monster,
+            nearest_monster_distance=nearest_distance,
+            second_monster_distance=second_distance,
+            nearest_monster_distance_last=nearest_distance_last,
+            nearest_monster_distance_delta=nearest_distance_delta,
+            average_monster_distance=average_distance,
+        )
 
     def compute_resource_summary(self) -> ResourceSummary:
-        """
-        汇总当前帧资源机会相关的基础摘要。
+        raw = self.current.raw
+        if raw is None:
+            return ResourceSummary()
 
-        使用场景：
-        - 每帧派生资源信息时调用。
-        - 当 obs / reward 需要最近已知宝箱、最近已知 buff、发现进度等统一入口时使用。
+        nearest_treasure = self.get_nearest_known_treasure()
+        nearest_buff = self.get_nearest_known_buff()
 
-        功能：
-        - 查找最近已知宝箱与最近已知 buff。
-        - 统计宝箱 / buff 的发现进度与收集进度。
-        - 为资源推进类观测和 shaping 提供标准化输入。
+        nearest_treasure_distance = None
+        if nearest_treasure is not None:
+            nearest_treasure_distance = distance_l2(raw.hero.x, raw.hero.z, nearest_treasure.x, nearest_treasure.z)
 
-        输入：
-        - 无显式参数，内部依赖资源全局缓存与当前英雄位置。
+        nearest_buff_distance = None
+        if nearest_buff is not None:
+            nearest_buff_distance = distance_l2(raw.hero.x, raw.hero.z, nearest_buff.x, nearest_buff.z)
 
-        输出：
-        - `ResourceSummary`: 当前帧资源机会摘要。
-        """
-        raise NotImplementedError
+        treasure_discovered_count = len(self.get_known_treasures(only_available=False))
+        buff_discovered_count = len(self.get_known_buffs(only_available=False))
+
+        treasure_progress = 0.0
+        if raw.total_treasure > 0:
+            treasure_progress = raw.treasures_collected / raw.total_treasure
+
+        buff_progress = 0.0
+        if raw.total_buff > 0:
+            buff_progress = raw.collected_buff / raw.total_buff
+
+        return ResourceSummary(
+            nearest_known_treasure=nearest_treasure,
+            nearest_known_treasure_distance=nearest_treasure_distance,
+            nearest_known_buff=nearest_buff,
+            nearest_known_buff_distance=nearest_buff_distance,
+            treasure_discovered_count=treasure_discovered_count,
+            buff_discovered_count=buff_discovered_count,
+            treasure_progress=treasure_progress,
+            buff_progress=buff_progress,
+        )
 
     def compute_space_summary(self) -> SpaceSummary:
         """
         汇总当前帧局部地形与活动空间的基础统计。
-
-        使用场景：
-        - 每帧更新空间特征时调用。
-        - 当 obs / reward 需要通路长度、开阔度、死角风险等信息时使用。
-
-        功能：
-        - 计算八方向通路长度、可活动空间、开阔度、安全方向数量。
-        - 生成死角、走廊、低开阔等局部结构判定。
-        - 为后续空间变化惩罚和生存分析提供基础量。
-
-        输入：
-        - 无显式参数，内部依赖当前局部地图与必要的历史统计。
-
-        输出：
-        - `SpaceSummary`: 当前帧空间结构摘要。
         """
-        raise NotImplementedError
+        raw = self.current.raw
+        if raw is None:
+            return SpaceSummary()
+
+        map_view = raw.map_view
+        cx, cz = VIEW_CENTER, VIEW_CENTER
+
+        def is_walkable(nx: int, nz: int) -> bool:
+            if nx < 0 or nx >= VIEW_SIZE or nz < 0 or nz >= VIEW_SIZE:
+                return False
+            return bool(map_view[nz, nx] == 1)
+
+        # 1) 八方向通路长度
+        corridor_lengths: list[int] = []
+        for dx, dz in MOVE_DIR_VEC:
+            length = 0
+            nx, nz = cx + dx, cz + dz
+            while 0 <= nx < VIEW_SIZE and 0 <= nz < VIEW_SIZE and is_walkable(nx, nz):
+                length += 1
+                nx += dx
+                nz += dz
+            corridor_lengths.append(length)
+
+        # 2) 局部可活动空间
+        traversable_space = int(np.count_nonzero(map_view == 1))
+
+        # 3) 英雄周围开阔度（8 邻域可走数）
+        openness = 0
+        for dx, dz in MOVE_DIR_VEC:
+            if is_walkable(cx + dx, cz + dz):
+                openness += 1
+
+        # 4) 安全方向数：下一步可走，且目标格不与怪物相邻
+        monster_positions = {(m.x, m.z) for m in raw.monsters}
+        safe_direction_count = 0
+        for dx, dz in MOVE_DIR_VEC:
+            nx_local = cx + dx
+            nz_local = cz + dz
+            if not is_walkable(nx_local, nz_local):
+                continue
+
+            nx_global = raw.hero.x + dx
+            nz_global = raw.hero.z + dz
+
+            is_safe = True
+            for mx, mz in monster_positions:
+                if chebyshev_distance(nx_global, nz_global, mx, mz) <= 1:
+                    is_safe = False
+                    break
+
+            if is_safe:
+                safe_direction_count += 1
+
+        # 5) 与上一帧比较
+        traversable_space_last = self.previous.space_summary.traversable_space
+        traversable_space_delta = traversable_space - traversable_space_last
+
+        # 6) 局部结构判定
+        is_dead_end = safe_direction_count <= 1
+        is_low_openness = openness <= 2
+        is_corridor = is_low_openness and max(corridor_lengths, default=0) >= 2
+
+        return SpaceSummary(
+            corridor_lengths=corridor_lengths,
+            traversable_space=traversable_space,
+            openness=openness,
+            safe_direction_count=safe_direction_count,
+            traversable_space_delta=traversable_space_delta,
+            is_dead_end=is_dead_end,
+            is_corridor=is_corridor,
+            is_low_openness=is_low_openness,
+        )
 
     def compute_stage_info(self) -> StageInfo:
         """
         计算当前帧所属阶段及阶段权重相关信息。
-
-        使用场景：
-        - 每帧更新节奏信息时调用。
-        - 当 obs 需要阶段观测、reward 需要阶段权重 `alpha` 时使用。
-
-        功能：
-        - 结合当前步数、怪物数量、怪物加速节点判断当前阶段。
-        - 计算距离下一个关键阶段的剩余步数。
-        - 生成 reward 混合权重所需的阶段参数。
-
-        输入：
-        - 无显式参数，内部依赖当前原始观测与环境配置字段。
-
-        输出：
-        - `StageInfo`: 当前帧阶段与节奏摘要。
         """
-        raise NotImplementedError
+        raw = self.current.raw
+        if raw is None:
+            return StageInfo()
+
+        has_second_monster = len(raw.monsters) >= 2
+        is_speed_boost_stage = raw.step >= raw.monster_speed_boost_step
+
+        if is_speed_boost_stage:
+            stage = 3
+        elif has_second_monster:
+            stage = 2
+        else:
+            stage = 1
+
+        if stage == 1:
+            if raw.monster_interval >= 0:
+                steps_to_next_stage = max(0, raw.monster_interval - raw.step)
+            else:
+                steps_to_next_stage = 0
+        elif stage == 2:
+            if raw.monster_speed_boost_step >= 0:
+                steps_to_next_stage = max(0, raw.monster_speed_boost_step - raw.step)
+            else:
+                steps_to_next_stage = 0
+        else:
+            steps_to_next_stage = 0
+
+        return StageInfo(
+            stage=stage,
+            has_second_monster=has_second_monster,
+            is_speed_boost_stage=is_speed_boost_stage,
+            steps_to_next_stage=steps_to_next_stage,
+            alpha=ALPHA_MAP[stage],
+        )
 
     def compute_local_map_layers(self) -> LocalMapLayers:
         """
         构造当前帧局部地图多通道表达。
-
-        使用场景：
-        - obs 需要直接消费 `21×21×n` 局部地图输入时调用。
-        - 调试局部空间表达是否完整、各通道是否对齐时使用。
-
-        功能：
-        - 生成障碍、英雄、怪物、宝箱、buff、访问次数等局部地图通道。
-        - 统一局部图的坐标对齐方式，作为视觉/空间输入的底层表示。
-
-        输入：
-        - 无显式参数，内部依赖当前视野、实体位置和历史访问缓存。
-
-        输出：
-        - `LocalMapLayers`: 当前帧局部地图多通道结构。
         """
-        raise NotImplementedError
+        raw = self.current.raw
+        if raw is None:
+            return LocalMapLayers()
 
-    # ==================== shared query interface ====================
+        obstacle = (raw.map_view == 0).astype(np.int8)
+
+        hero = np.zeros((VIEW_SIZE, VIEW_SIZE), dtype=np.int8)
+        hero[VIEW_CENTER, VIEW_CENTER] = 1
+
+        monster = np.zeros((VIEW_SIZE, VIEW_SIZE), dtype=np.int8)
+        for m in raw.monsters:
+            dx = m.x - raw.hero.x
+            dz = m.z - raw.hero.z
+            lx = VIEW_CENTER + dx
+            lz = VIEW_CENTER + dz
+            if 0 <= lx < VIEW_SIZE and 0 <= lz < VIEW_SIZE:
+                monster[lz, lx] = 1
+
+        treasure = np.zeros((VIEW_SIZE, VIEW_SIZE), dtype=np.int8)
+        for t in raw.treasures:
+            dx = t.x - raw.hero.x
+            dz = t.z - raw.hero.z
+            lx = VIEW_CENTER + dx
+            lz = VIEW_CENTER + dz
+            if 0 <= lx < VIEW_SIZE and 0 <= lz < VIEW_SIZE:
+                treasure[lz, lx] = 1
+
+        buff = np.zeros((VIEW_SIZE, VIEW_SIZE), dtype=np.int8)
+        for b in raw.buffs:
+            dx = b.x - raw.hero.x
+            dz = b.z - raw.hero.z
+            lx = VIEW_CENTER + dx
+            lz = VIEW_CENTER + dz
+            if 0 <= lx < VIEW_SIZE and 0 <= lz < VIEW_SIZE:
+                buff[lz, lx] = 1
+
+        visit = build_local_window(self.visit_count, raw.hero.x, raw.hero.z, pad_value=0).astype(np.float32)
+
+        return LocalMapLayers(
+            obstacle=obstacle,
+            hero=hero,
+            monster=monster,
+            treasure=treasure,
+            buff=buff,
+            visit=visit,
+        )
+
     def get_nearest_monsters(self) -> tuple[Monster | None, Monster | None]:
-        """
-        查询当前帧距离英雄最近的两只怪物。
+        raw = self.current.raw
+        if raw is None:
+            return None, None
 
-        使用场景：
-        - `compute_monster_summary()` 的底层查询接口。
-        - reward / debug 需要直接访问最近怪与第二怪时使用。
-
-        功能：
-        - 对当前怪物按有效距离排序。
-        - 返回最近怪物和第二怪物，不存在时返回 `None`。
-
-        输入：
-        - 无显式参数，内部依赖当前帧怪物状态。
-
-        输出：
-        - `tuple[Monster | None, Monster | None]`: `(nearest_monster, second_monster)`。
-        """
-        raise NotImplementedError
+        hero = raw.hero
+        monsters = sorted(
+            raw.monsters,
+            key=lambda m: chebyshev_distance(hero.x, hero.z, m.x, m.z),
+        )
+        nearest = monsters[0] if len(monsters) >= 1 else None
+        second = monsters[1] if len(monsters) >= 2 else None
+        return nearest, second
 
     def get_nearest_known_treasure(self) -> Organ | None:
-        """
-        查询当前已知宝箱中距离英雄最近的一个。
-
-        使用场景：
-        - `compute_resource_summary()` 内部调用。
-        - reward 需要比较是否更接近最近宝箱时使用。
-
-        功能：
-        - 基于历史已知且满足可用条件的宝箱缓存进行距离筛选。
-        - 返回最近目标，不存在时返回 `None`。
-
-        输入：
-        - 无显式参数，内部依赖 `treasure_full` 与当前英雄位置。
-
-        输出：
-        - `Organ | None`: 最近已知宝箱。
-        """
-        raise NotImplementedError
+        raw = self.current.raw
+        if raw is None:
+            return None
+        treasures = self.get_known_treasures(only_available=True)
+        if not treasures:
+            return None
+        hero = raw.hero
+        return min(treasures, key=lambda o: distance_l2(hero.x, hero.z, o.x, o.z))
 
     def get_nearest_known_buff(self) -> Organ | None:
-        """
-        查询当前已知 buff 点中距离英雄最近的一个。
-
-        使用场景：
-        - `compute_resource_summary()` 内部调用。
-        - reward / obs 需要评估最近 buff 机会时使用。
-
-        功能：
-        - 基于历史已知 buff 缓存筛选最近目标。
-        - 可结合是否可获取、是否处于 cooldown 等条件过滤。
-
-        输入：
-        - 无显式参数，内部依赖 `buff_full` 与当前英雄位置。
-
-        输出：
-        - `Organ | None`: 最近已知 buff；不存在时返回 `None`。
-        """
-        raise NotImplementedError
+        raw = self.current.raw
+        if raw is None:
+            return None
+        buffs = self.get_known_buffs(only_available=True)
+        if not buffs:
+            return None
+        hero = raw.hero
+        return min(buffs, key=lambda o: distance_l2(hero.x, hero.z, o.x, o.z))
 
     def get_known_treasures(self, only_available: bool = True) -> list[Organ]:
-        """
-        返回当前缓存中满足条件的已知宝箱列表。
-
-        使用场景：
-        - 资源摘要、目标选择、调试输出时使用。
-        - 当需要统一遍历“历史已知宝箱”而非仅当前视野宝箱时使用。
-
-        功能：
-        - 从 `treasure_full` 中筛选有效条目。
-        - 根据 `only_available` 控制是否仅返回当前仍可收集的宝箱。
-
-        输入：
-        - `only_available`: 是否只返回仍可获取的宝箱。
-
-        输出：
-        - `list[Organ]`: 满足条件的宝箱列表。
-        """
-        raise NotImplementedError
+        treasures = [t for t in self.treasure_full if t is not None]
+        if only_available:
+            treasures = [t for t in treasures if t.status == 1]
+        return treasures
 
     def get_known_buffs(self, only_available: bool = False) -> list[Organ]:
-        """
-        返回当前缓存中满足条件的已知 buff 列表。
-
-        使用场景：
-        - 资源摘要、reward 辅助判断、调试输出时使用。
-        - 当需要统一遍历“历史已知 buff 点”时使用。
-
-        功能：
-        - 从 `buff_full` 中筛选有效条目。
-        - 根据 `only_available` 控制是否只返回当前可获取的 buff。
-
-        输入：
-        - `only_available`: 是否仅返回当前可用的 buff。
-
-        输出：
-        - `list[Organ]`: 满足条件的 buff 列表。
-        """
-        raise NotImplementedError
+        buffs = [b for b in self.buff_full.values() if b is not None]
+        if only_available:
+            buffs = [b for b in buffs if b.status == 1 and b.cooldown == 0]
+        return buffs
 
     def get_move_valid_mask(self) -> list[bool]:
-        """
-        返回普通移动 8 方向的有效性掩码。
+        """返回普通移动 8 方向的有效性掩码"""
+        raw = self.current.raw
+        if raw is None:
+            return [False] * 8
 
-        使用场景：
-        - `compute_action_result()` 内部使用。
-        - 策略前处理或规则过滤需要快速获取移动可行方向时使用。
+        map_view = raw.map_view
+        cx, cz = VIEW_CENTER, VIEW_CENTER
 
-        功能：
-        - 根据当前局部地图和移动规则判断八方向移动是否可执行。
-        - 输出与动作定义顺序一致的布尔掩码。
+        def is_walkable(nx: int, nz: int) -> bool:
+            if nx < 0 or nx >= VIEW_SIZE or nz < 0 or nz >= VIEW_SIZE:
+                return False
+            return bool(map_view[nz, nx] == 1)
 
-        输入：
-        - 无显式参数，内部依赖当前局部地图与英雄所在位置。
-
-        输出：
-        - `list[bool]`: 八方向普通移动有效性列表。
-        """
-        raise NotImplementedError
+        mask: list[bool] = []
+        for dx, dz in MOVE_DIR_VEC:
+            nx, nz = cx + dx, cz + dz
+            if dx != 0 and dz != 0:
+                ok = is_walkable(nx, nz) and (
+                    is_walkable(cx + dx, cz) or is_walkable(cx, cz + dz)
+                )
+                mask.append(ok)
+            else:
+                mask.append(is_walkable(nx, nz))
+        return mask
 
     def get_flash_result(self) -> ActionResult:
         """
         返回当前帧与闪现动作相关的结果集合。
-
-        使用场景：
-        - obs 需要直接使用闪现落点、位移长度、有效性时使用。
-        - 规则或 reward 需要分析闪现质量时使用。
-
-        功能：
-        - 统一暴露闪现 8 方向落点、相对位移、有效性和位移长度。
-        - 避免上层重复调用底层闪现推导逻辑。
-
-        输入：
-        - 无显式参数，内部通常复用 `compute_action_result()` 的结果。
-
-        输出：
-        - `ActionResult`: 包含闪现相关字段的动作结果结构。
         """
-        raise NotImplementedError
+        raw = self.current.raw
+        if raw is None:
+            return ActionResult(
+                flash_pos=[(0, 0)] * 8,
+                flash_pos_relative=[(0, 0)] * 8,
+                flash_valid_mask=[False] * 8,
+                flash_distance=[0.0] * 8,
+            )
+
+        local_flash_pos = predict_flash_pos(raw.map_view, VIEW_CENTER, VIEW_CENTER)
+        relative = flash_pos_relative(local_flash_pos, VIEW_CENTER, VIEW_CENTER)
+        valid = flash_validation(relative)
+        global_flash_pos = [(raw.hero.x + dx, raw.hero.z + dz) for dx, dz in relative]
+        flash_distance = [float(max(abs(dx), abs(dz))) for dx, dz in relative]
+
+        return ActionResult(
+            flash_pos=global_flash_pos,
+            flash_pos_relative=relative,
+            flash_valid_mask=valid,
+            flash_distance=flash_distance,
+        )
 
     def get_stage_alpha(self) -> float:
         """
         返回当前阶段对应的 reward 混合权重 `alpha`。
-
-        使用场景：
-        - reward 计算中需要按阶段平衡“生存项”和“资源推进项”时使用。
-        - 调试阶段切换是否合理时也可直接查询。
-
-        功能：
-        - 从当前阶段信息中提取统一的阶段权重。
-        - 避免 reward 模块自行重复推导阶段系数。
-
-        输入：
-        - 无显式参数，内部依赖 `self.current.stage_info`。
-
-        输出：
-        - `float`: 当前阶段的混合权重。
         """
-        raise NotImplementedError
+        return self.current.stage_info.alpha
 
-    # ==================== obs / reward export ====================
+    # ======================================== building
+
     def build_obs_state(self) -> dict:
         """
         构造供 obs 模块消费的统一结构化状态。
-
-        使用场景：
-        - obs 构建流程的直接输入接口。
-        - 当上层不希望直接访问 extractor 内部细粒度字段时使用。
-
-        功能：
-        - 将英雄、怪物、资源、空间、阶段、局部地图、动作结果等信息整理为稳定字典。
-        - 屏蔽底层缓存细节，向 obs 暴露语义稳定的数据视图。
-
-        输入：
-        - 无显式参数，内部依赖当前快照与各类缓存。
-
-        输出：
-        - `dict`: 面向 obs 模块的结构化状态字典。
         """
-        raise NotImplementedError
+        raw = self.current.raw
+        monster_summary = self.current.monster_summary
+        resource_summary = self.current.resource_summary
+        space_summary = self.current.space_summary
+        stage_info = self.current.stage_info
+        action_result = self.current.action_result
+        action_feedback = self.current.action_feedback
+        local_map_layers = self.current.local_map_layers
+
+        return {
+            # ===== raw / hero
+            "raw": raw,
+            "hero": raw.hero if raw is not None else None,
+            "hero_speed": self.current.hero_speed,
+            "legal_action": raw.legal_action if raw is not None else None,
+            "step": raw.step if raw is not None else 0,
+
+            # ===== map / explore
+            "map_explore_rate": self.current.map_explore_rate,
+            "map_new_discover": self.current.map_new_discover,
+            "local_map_layers": local_map_layers,
+            "local_map_stack": local_map_layers.as_stack(),
+
+            # ===== monster
+            "monster_summary": monster_summary,
+            "nearest_monster": monster_summary.nearest_monster,
+            "second_monster": monster_summary.second_monster,
+            "nearest_monster_distance": monster_summary.nearest_monster_distance,
+            "second_monster_distance": monster_summary.second_monster_distance,
+            "nearest_monster_distance_last": monster_summary.nearest_monster_distance_last,
+            "nearest_monster_distance_delta": monster_summary.nearest_monster_distance_delta,
+            "average_monster_distance": monster_summary.average_monster_distance,
+            "monster_count": monster_summary.monster_count,
+
+            # ===== resource
+            "resource_summary": resource_summary,
+            "nearest_known_treasure": resource_summary.nearest_known_treasure,
+            "nearest_known_treasure_distance": resource_summary.nearest_known_treasure_distance,
+            "nearest_known_buff": resource_summary.nearest_known_buff,
+            "nearest_known_buff_distance": resource_summary.nearest_known_buff_distance,
+            "treasure_discovered_count": resource_summary.treasure_discovered_count,
+            "buff_discovered_count": resource_summary.buff_discovered_count,
+            "treasure_progress": resource_summary.treasure_progress,
+            "buff_progress": resource_summary.buff_progress,
+
+            # ===== space
+            "space_summary": space_summary,
+            "corridor_lengths": space_summary.corridor_lengths,
+            "traversable_space": space_summary.traversable_space,
+            "openness": space_summary.openness,
+            "safe_direction_count": space_summary.safe_direction_count,
+            "traversable_space_delta": space_summary.traversable_space_delta,
+            "is_dead_end": space_summary.is_dead_end,
+            "is_corridor": space_summary.is_corridor,
+            "is_low_openness": space_summary.is_low_openness,
+
+            # ===== stage
+            "stage_info": stage_info,
+            "stage": stage_info.stage,
+            "has_second_monster": stage_info.has_second_monster,
+            "is_speed_boost_stage": stage_info.is_speed_boost_stage,
+            "steps_to_next_stage": stage_info.steps_to_next_stage,
+            "alpha": stage_info.alpha,
+
+            # ===== action
+            "action_result": action_result,
+            "move_valid_mask": action_result.move_valid_mask,
+            "flash_pos": action_result.flash_pos,
+            "flash_pos_relative": action_result.flash_pos_relative,
+            "flash_valid_mask": action_result.flash_valid_mask,
+            "flash_distance": action_result.flash_distance,
+            "action_preferred": action_result.action_preferred,
+
+            # ===== last action feedback
+            "action_feedback": action_feedback,
+            "moved": action_feedback.moved,
+            "moved_effectively": action_feedback.moved_effectively,
+            "nearest_monster_distance_increased": action_feedback.nearest_monster_distance_increased,
+            "picked_treasure": action_feedback.picked_treasure,
+            "picked_buff": action_feedback.picked_buff,
+            "gained_resource": action_feedback.gained_resource,
+            "explored_new_area": action_feedback.explored_new_area,
+        }
 
     def build_reward_state(self) -> dict:
         """
         构造供 reward 模块消费的统一结构化状态。
-
-        使用场景：
-        - reward 计算流程入口。
-        - 当 reward 需要统一访问变化型字段、阶段信息、空间风险、资源推进信息时使用。
-
-        功能：
-        - 汇总 reward 所需的环境增量、动作反馈、怪物压力、资源机会、空间结构与阶段权重。
-        - 将 reward 逻辑依赖的数据集中暴露，避免 reward 直接回到底层缓存取数。
-
-        输入：
-        - 无显式参数，内部依赖当前/上一帧快照与各类缓存。
-
-        输出：
-        - `dict`: 面向 reward 模块的结构化状态字典。
         """
-        raise NotImplementedError
+        raw = self.current.raw
+        action_feedback = self.current.action_feedback
+        reward_delta = action_feedback.reward_delta
+        monster_summary = self.current.monster_summary
+        resource_summary = self.current.resource_summary
+        space_summary = self.current.space_summary
+        stage_info = self.current.stage_info
+
+        return {
+            # ===== raw
+            "raw": raw,
+            "terminated": self.terminated,
+            "truncated": self.truncated,
+
+            # ===== reward delta
+            "reward_delta": reward_delta,
+            "total_score_delta": reward_delta.total_score_delta,
+            "step_score_delta": reward_delta.step_score_delta,
+            "treasure_score_delta": reward_delta.treasure_score_delta,
+            "treasures_collected_delta": reward_delta.treasures_collected_delta,
+            "collected_buff_delta": reward_delta.collected_buff_delta,
+            "flash_count_delta": reward_delta.flash_count_delta,
+
+            # ===== action feedback
+            "action_feedback": action_feedback,
+            "moved": action_feedback.moved,
+            "moved_effectively": action_feedback.moved_effectively,
+            "nearest_monster_distance_increased": action_feedback.nearest_monster_distance_increased,
+            "picked_treasure": action_feedback.picked_treasure,
+            "picked_buff": action_feedback.picked_buff,
+            "gained_resource": action_feedback.gained_resource,
+            "explored_new_area": action_feedback.explored_new_area,
+
+            # ===== monster pressure
+            "monster_summary": monster_summary,
+            "monster_count": monster_summary.monster_count,
+            "nearest_monster": monster_summary.nearest_monster,
+            "second_monster": monster_summary.second_monster,
+            "nearest_monster_distance": monster_summary.nearest_monster_distance,
+            "second_monster_distance": monster_summary.second_monster_distance,
+            "nearest_monster_distance_last": monster_summary.nearest_monster_distance_last,
+            "nearest_monster_distance_delta": monster_summary.nearest_monster_distance_delta,
+            "average_monster_distance": monster_summary.average_monster_distance,
+
+            # ===== resource opportunity
+            "resource_summary": resource_summary,
+            "nearest_known_treasure": resource_summary.nearest_known_treasure,
+            "nearest_known_treasure_distance": resource_summary.nearest_known_treasure_distance,
+            "nearest_known_buff": resource_summary.nearest_known_buff,
+            "nearest_known_buff_distance": resource_summary.nearest_known_buff_distance,
+            "treasure_discovered_count": resource_summary.treasure_discovered_count,
+            "buff_discovered_count": resource_summary.buff_discovered_count,
+            "treasure_progress": resource_summary.treasure_progress,
+            "buff_progress": resource_summary.buff_progress,
+
+            # ===== space risk
+            "space_summary": space_summary,
+            "corridor_lengths": space_summary.corridor_lengths,
+            "traversable_space": space_summary.traversable_space,
+            "openness": space_summary.openness,
+            "safe_direction_count": space_summary.safe_direction_count,
+            "traversable_space_delta": space_summary.traversable_space_delta,
+            "is_dead_end": space_summary.is_dead_end,
+            "is_corridor": space_summary.is_corridor,
+            "is_low_openness": space_summary.is_low_openness,
+
+            # ===== stage
+            "stage_info": stage_info,
+            "stage": stage_info.stage,
+            "has_second_monster": stage_info.has_second_monster,
+            "is_speed_boost_stage": stage_info.is_speed_boost_stage,
+            "steps_to_next_stage": stage_info.steps_to_next_stage,
+            "alpha": stage_info.alpha,
+        }
 
     def build_debug_state(self) -> dict:
         """
         构造供日志、调试、分析使用的辅助状态。
-
-        使用场景：
-        - 调试 extractor 内部状态是否正确。
-        - 分析地图缓存、资源缓存、阶段切换和动作反馈是否符合预期。
-
-        功能：
-        - 暴露当前快照、上一帧快照、地图缓存、资源缓存等调试价值高的数据。
-        - 为实验排查与可视化分析提供统一的辅助出口。
-
-        输入：
-        - 无显式参数，内部依赖 extractor 当前内部完整状态。
-
-        输出：
-        - `dict`: 面向日志与调试分析的辅助状态字典。
         """
-        raise NotImplementedError
+        return {
+            # ===== lifecycle
+            "initialized": self.initialized,
+            "terminated": self.terminated,
+            "truncated": self.truncated,
+
+            # ===== snapshots
+            "current": self.current,
+            "previous": self.previous,
+            "current_raw": self.current.raw,
+            "previous_raw": self.previous.raw,
+
+            # ===== cache
+            "map_id": self.map_id,
+            "map_full": self.map_full,
+            "visit_count": self.visit_count,
+            "treasure_full": self.treasure_full,
+            "buff_full": self.buff_full,
+            "pos_history": list(self.pos_history),
+
+            # ===== current derived
+            "hero_speed": self.current.hero_speed,
+            "map_explore_rate": self.current.map_explore_rate,
+            "map_new_discover": self.current.map_new_discover,
+            "monster_summary": self.current.monster_summary,
+            "resource_summary": self.current.resource_summary,
+            "space_summary": self.current.space_summary,
+            "stage_info": self.current.stage_info,
+            "action_result": self.current.action_result,
+            "action_feedback": self.current.action_feedback,
+            "local_map_layers": self.current.local_map_layers,
+
+            # ===== helper exports
+            "obs_state": self.build_obs_state(),
+            "reward_state": self.build_reward_state(),
+        }
