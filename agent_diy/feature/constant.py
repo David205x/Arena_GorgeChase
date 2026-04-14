@@ -1,30 +1,37 @@
-RelativeDistance = {
-    'RELATIVE_DISTANCE_NONE': 0,
-    'VerySmall': 1,
-    'Small': 2,
-    'Medium': 3,
-    'Large': 4,
-    'VeryLarge': 5,
-}
+# Map size / 地图尺寸（128×128）
+MAP_SIZE = 128
+# Local view size / 局部视野尺寸（21×21）
+VIEW_SIZE = 21
+# Local view center index / 局部视野中心索引
+VIEW_CENTER = VIEW_SIZE // 2
+# Flash max distance / 闪现直线最大距离
+FLASH_DISTANCE = 10
+# Flash diagonal max distance / 闪现斜向最大距离
+FLASH_DISTANCE_DIAGONAL = 8
+# Position history length / 历史位置缓存长度
+POS_HISTORY_LEN = 10
 
-RelativeDirection = {
-    'East': 1,
-    'NorthEast': 2,
-    'North': 3,
-    'NorthWest': 4,
-    'West': 5,
-    'SouthWest': 6,
-    'South': 7,
-    'SouthEast': 8,
-}
 
-DirectionAngles = {
-    1: 0,
-    2: 45,
-    3: 90,
-    4: 135,
-    5: 180,
-    6: 225,
-    7: 270,
-    8: 315,
-}
+_FLASH_DIR_VEC: list[tuple[int, int]] = [
+    (1, 0),
+    (1, -1),
+    (0, -1),
+    (-1, -1),
+    (-1, 0),
+    (-1, 1),
+    (0, 1),
+    (1, 1),
+]
+"""[右, 右上, 上, 左上, 左, 左下, 下, 右下]"""
+
+_MOVE_DIR_VEC: list[tuple[int, int]] = [
+    (1, 0),
+    (1, -1),
+    (0, -1),
+    (-1, -1),
+    (-1, 0),
+    (-1, 1),
+    (0, 1),
+    (1, 1),
+]
+"""与移动 8 方向保持一致"""
