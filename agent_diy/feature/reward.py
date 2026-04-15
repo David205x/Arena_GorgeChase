@@ -36,7 +36,7 @@ W_STEP_SCORE             = 1.0 / 100.0
 W_TREASURE_SCORE         = 1.0 / 100.0
 
 # --- 4.4  survival: monster distance ---
-SAFE_DIST                = 40.0
+SAFE_DIST                = 20.0
 W_DIST_DELTA             = 0.015
 DIST_DELTA_CLIP          = 5.0
 
@@ -45,7 +45,7 @@ ENCIRCLE_AVG_SAFE        = 50.0
 W_ENCIRCLE               = 0.020
 
 # --- 4.4  survival: traversable space ---
-W_SPACE_DELTA            = 0.003
+W_SPACE_DELTA            = 0.001
 SPACE_DELTA_CLIP         = 10.0
 
 # --- 4.4  survival: dangerous topology ---
@@ -58,10 +58,10 @@ W_TREASURE_APPROACH      = 0.010
 TREASURE_APPROACH_CLIP   = 5.0
 
 # --- 4.5  explore: map exploration ---
-W_EXPLORE                = 3.0
+W_EXPLORE                = 100.0
 
 # --- 4.6  action quality (survival-aligned, ×α) ---
-NO_MOVE_PEN              = -0.06
+NO_MOVE_PEN              = -0.1
 LOW_FLASH_RATIO          = 0.5
 LOW_FLASH_PEN            = -0.04
 FLASH_ESCAPE_BONUS       = 0.06

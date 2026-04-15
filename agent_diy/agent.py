@@ -111,6 +111,7 @@ class Agent(BaseAgent):
 
         action = self._sample(probs_np, use_max=False)
         d_action = self._sample(probs_np, use_max=True)
+        self.last_action = int(action)
 
         return [
             ActData(

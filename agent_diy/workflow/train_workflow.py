@@ -36,6 +36,7 @@ class EpisodeRunner:
         self.last_get_training_metrics_time = 0
         self.web_server = WebControlServer(logger=logger)
         self.extractor = Extractor()
+        self.last_action: int = -1
 
     def _split_env_obs(self, env_obs):
         observation = env_obs.get("observation")
@@ -60,6 +61,7 @@ class EpisodeRunner:
             extra_info=extra_info,
             terminated=terminated,
             truncated=truncated,
+            last_action=self.last_action
         )
         debug_state = self.extractor.build_debug_state()
         # `current/previous` 与 obs/reward_state 内容高度重叠，网页中保留展开后的详细状态即可。
@@ -148,6 +150,7 @@ class EpisodeRunner:
                     done,
                     extractor_view=extractor_view,
                 )
+                self.last_action = action
 
 
 def workflow(envs, agents, logger=None, monitor=None, *args, **kwargs):

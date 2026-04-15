@@ -102,6 +102,7 @@
             gap: 10px;
         }
         .board {
+            aspect-ratio: 1;
             flex: 1;
             min-height: 0;
             display: grid;
@@ -110,16 +111,16 @@
             background: var(--p3);
             border: 1px solid var(--l);
             border-radius: 16px;
-            padding: 10px;
+            padding: 8px;
             aspect-ratio: 1;
         }
         .cell {
             aspect-ratio: 1;
-            border-radius: 5px;
+            border-radius: 4px;
             display: flex;
             align-items: center;
             justify-content: center;
-            font-size: 10px;
+            font-size: 9px;
             font-weight: 800;
             user-select: none;
         }
@@ -131,7 +132,39 @@
         .entity-buff { background: var(--buf) !important; color: #032436; }
         .trail { box-shadow: inset 0 0 0 2px rgba(125, 211, 252, 0.38); }
         .trail.entity-hero { box-shadow: inset 0 0 0 2px rgba(236, 253, 245, 0.9), 0 0 0 2px rgba(74, 222, 128, 0.35); }
-        .legend { display: flex; flex-wrap: wrap; gap: 8px; }
+        .map-panel {
+            position: relative;
+            flex: 1;
+            min-height: 0;
+        }
+        #mapname {
+            position: absolute;
+            top: 12px;
+            left: 12px;
+            z-index: 2;
+            pointer-events: none;
+            background: rgba(10, 18, 32, 0.82);
+            backdrop-filter: blur(10px);
+            border-color: rgba(41, 64, 95, 0.92);
+            box-shadow: 0 10px 24px rgba(0, 0, 0, 0.28);
+        }
+        .legend {
+            position: absolute;
+            left: 12px;
+            right: 12px;
+            bottom: 12px;
+            display: flex;
+            flex-wrap: wrap;
+            gap: 8px;
+            pointer-events: none;
+            z-index: 2;
+        }
+        .legend .chip {
+            background: rgba(10, 18, 32, 0.82);
+            backdrop-filter: blur(10px);
+            border-color: rgba(41, 64, 95, 0.92);
+            box-shadow: 0 10px 24px rgba(0, 0, 0, 0.28);
+        }
         .dot { width: 9px; height: 9px; border-radius: 999px; }
         .mini {
             width: 100%;
@@ -308,6 +341,20 @@
             color: #cfe3ff;
             font-size: 11px;
             line-height: 1.35;
+        }
+        .obs-page-content,
+        .reward-page-content {
+            flex: 1 1 auto;
+            min-height: 0;
+            overflow: auto;
+            padding: 12px 14px;
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+        }
+        .obs-page-content > *,
+        .reward-page-content > * {
+            flex: 0 0 auto;
         }
         details.fold {
             min-height: 0;
@@ -508,13 +555,12 @@
 <body>
     <div class="app">
         <section class="panel">
-            <div class="sec top">
-                <div>
+            <!-- <div class="sec top"> -->
+                <!-- <div>
                     <h1>峡谷追猎 · GorgeChase</h1>
                     <p>左侧主图渲染局部 21×21 视野，右侧以分页方式展示环境、Extractor obs、reward、监控与调试信息。</p>
-                </div>
-                <div id="mapname" class="chip">地图加载中</div>
-            </div>
+                </div> -->
+            <!-- </div> -->
             <div class="sec maparea">
                 <div class="col">
                     <canvas id="minimap" class="mini" width="256" height="256"></canvas>
@@ -528,14 +574,17 @@
                     </div>
                 </div>
                 <div class="col">
-                    <div id="map" class="board"></div>
-                    <div class="legend">
-                        <span class="chip"><span class="dot" style="background:#243c59"></span>可通行</span>
-                        <span class="chip"><span class="dot" style="background:#0d1420"></span>障碍</span>
-                        <span class="chip"><span class="dot" style="background:#4ade80"></span>英雄</span>
-                        <span class="chip"><span class="dot" style="background:#fb7185"></span>怪物</span>
-                        <span class="chip"><span class="dot" style="background:#fbbf24"></span>宝箱</span>
-                        <span class="chip"><span class="dot" style="background:#38bdf8"></span>Buff</span>
+                    <div class="map-panel">
+                        <div id="mapname" class="chip">地图加载中</div>
+                        <div id="map" class="board"></div>
+                        <div class="legend">
+                            <span class="chip"><span class="dot" style="background:#243c59"></span>可通行</span>
+                            <span class="chip"><span class="dot" style="background:#0d1420"></span>障碍</span>
+                            <span class="chip"><span class="dot" style="background:#4ade80"></span>英雄</span>
+                            <span class="chip"><span class="dot" style="background:#fb7185"></span>怪物</span>
+                            <span class="chip"><span class="dot" style="background:#fbbf24"></span>宝箱</span>
+                            <span class="chip"><span class="dot" style="background:#38bdf8"></span>Buff</span>
+                        </div>
                     </div>
                 </div>
             </div>
@@ -568,10 +617,10 @@
                     </details>
                 </section>
                 <section id="page-obs" class="page">
-                    <div id="obs-content" style="overflow:auto; padding:12px 14px; display:grid; gap:10px; align-content:start;"></div>
+                    <div id="obs-content" class="obs-page-content"></div>
                 </section>
                 <section id="page-reward" class="page">
-                    <div id="reward-content" style="overflow:auto; padding:12px 14px; display:grid; gap:10px; align-content:start;"></div>
+                    <div id="reward-content" class="reward-page-content"></div>
                 </section>
                 <section id="page-monitor" class="page">
                     <div style="padding:24px; color:var(--m); font-size:13px;">暂未启用</div>
