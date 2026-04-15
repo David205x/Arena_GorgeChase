@@ -3,7 +3,6 @@ import numpy as np
 from .constant import *
 
 
-
 def chebyshev_distance(x1: int, z1: int, x2: int, z2: int) -> int:
     return max(abs(x1 - x2), abs(z1 - z2))
 

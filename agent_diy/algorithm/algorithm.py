@@ -1,169 +1,199 @@
-#!/usr/bin/env python3
-# -*- coding: UTF-8 -*-
-###########################################################################
-# Copyright © 1998 - 2026 Tencent. All Rights Reserved.
-###########################################################################
 """
-Author: Tencent AI Arena Authors
+PPO algorithm for agent_diy (multi-input model + distributional value).
+
+Enhancements over baseline agent_ppo:
+  - HL-Gauss distributional value loss (cross-entropy on soft categorical)
+  - Log-space importance ratio for numerical stability
+  - Ratio hard-clamp [0, 3] to prevent gradient explosion
+  - Dual-Clip PPO for negative-advantage protection
+  - Per-batch advantage normalisation
+  - channels_last memory format for CNN acceleration
 """
 
-import numpy as np
-import torch
-from torch.nn import functional as F
 import os
 import time
-from agent_diy.model.model import NetworkModelLearner
-from agent_diy.conf.conf import Config
+
+import torch
+import torch.nn.functional as F
+
+from agent_diy.model.model import Model, VF_N_BINS, VF_MIN, VF_MAX, ACTION_NUM
 from agent_diy.algorithm.objectives import HLGaussLoss
+
+# ======================== hyper-parameters ========================
+CLIP_PARAM = 0.2
+DUAL_CLIP = 3.0            # 0 to disable
+VF_COEF = 0.5
+ENTROPY_COEF = 0.01
+VF_SIGMA = 0.75
+GRAD_CLIP_NORM = 0.5
+LR = 3e-4
+ADV_NORM = True
+LOG_INTERVAL = 60          # seconds between monitor reports
 
 
 class Algorithm:
-    def __init__(self, model, optimizer, scheduler, device=None, logger=None, monitor=None):
-        # Hyperparams
-        self.label_size = Config.ACTION_NUM
-        self.var_beta = Config.ENTROPY_COEF
-        self.vf_coef = Config.VALUE_COEF
-        self.clip_param = Config.CLIP_PARAM
-        self.dual_clip = Config.DUAL_CLIP
-        self.clip_high = 1.0 + self.clip_param
-        self.clip_low = 1.0 / self.clip_high
-        self.grad_clip = Config.CLIP_GRAD_NORM
-        # Model
+    def __init__(self, device, logger=None, monitor=None):
         self.device = device
-        self.model = NetworkModelLearner().to(self.device)
+
+        # model
+        self.model = Model(device=device).to(device)
         self.model = self.model.to(memory_format=torch.channels_last)
-        self.lr = Config.START_LR
+
+        # optimiser
         self.optimizer = torch.optim.AdamW(
-            params=self.model.parameters(), lr=self.lr, betas=(0.9, 0.999), eps=1e-8
+            self.model.parameters(), lr=LR, betas=(0.9, 0.999), eps=1e-8,
         )
         self.parameters = [
-            p
-            for param_group in self.optimizer.param_groups
-            for p in param_group['params']
+            p for pg in self.optimizer.param_groups for p in pg["params"]
         ]
-        self.hl_gauss_loss = HLGaussLoss(
-            min_value=Config.VF_MIN,
-            max_value=Config.VF_MAX,
-            num_bins=Config.VF_BINS,
-            sigma=Config.VF_SIGMA,
-            device=self.device,
+
+        # HL-Gauss value objective
+        self.hl_gauss = HLGaussLoss(
+            min_value=VF_MIN,
+            max_value=VF_MAX,
+            num_bins=VF_N_BINS,
+            sigma=VF_SIGMA,
+            device=device,
         )
-        # Monitor
+
+        # PPO clip bounds
+        self.clip_param = CLIP_PARAM
+        self.clip_high = 1.0 + CLIP_PARAM
+        self.clip_low = 1.0 / self.clip_high
+        self.dual_clip = DUAL_CLIP
+        self.vf_coef = VF_COEF
+        self.entropy_coef = ENTROPY_COEF
+
+        # monitoring
         self.logger = logger
         self.monitor = monitor
-        self.last_report_monitor_time = 0
+        self.last_report_time = 0
+        self.train_step = 0
 
-    def learn(self, list_sample_data):
-        results = {}
-        self.model.train()
+    # ------------------------------------------------------------------ learn
+    def learn(self, batch: dict[str, torch.Tensor]):
+        """Single PPO update on a collated batch.
+
+        Expected keys
+        -------------
+        scalar       (B, 134)
+        local_map    (B, 8, 21, 21)
+        global_map   (B, 4, 64, 64)
+        legal_action (B, 16)       float mask 1/0
+        old_action   (B, 1)        int64 action index
+        old_prob     (B, 1)        float  probability of old_action under old policy
+        reward       (B,)
+        advantage    (B,)
+        td_return    (B,)          discounted return (value target)
+        """
+        scalar = batch["scalar"].to(self.device)
+        local_map = batch["local_map"].to(self.device)
+        global_map = batch["global_map"].to(self.device)
+        legal_action = batch["legal_action"].to(self.device)
+        old_action = batch["old_action"].to(self.device).long()
+        old_prob = batch["old_prob"].to(self.device)
+        reward = batch["reward"].to(self.device)
+        adv = batch["advantage"].to(self.device)
+        td_return = batch["td_return"].to(self.device)
+
+        self.model.set_train_mode()
         self.optimizer.zero_grad()
 
-        list_npdata = [
-            torch.as_tensor(sample_data.npdata, device=self.device)
-            for sample_data in list_sample_data
-        ]
-        _input_datas = torch.stack(list_npdata, dim=0)
-        data_list = self.model.format_data(_input_datas)
-        rst_list = self.model(data_list)
-        total_loss, info_list = self.compute_loss(data_list, rst_list)
-        results['total_loss'] = total_loss.item()
+        new_probs, value_logits = self.model(scalar, local_map, global_map, legal_action)
+
+        total_loss, info = self._compute_loss(
+            new_probs, value_logits, old_action, old_prob, adv, td_return,
+        )
         total_loss.backward()
 
-        if self.grad_clip > 0:
-            torch.nn.utils.clip_grad_norm_(self.parameters, self.grad_clip)
+        if GRAD_CLIP_NORM > 0:
+            torch.nn.utils.clip_grad_norm_(self.parameters, GRAD_CLIP_NORM)
         self.optimizer.step()
+        self.train_step += 1
 
-        _info_list = []
-        for info in info_list:
-            if isinstance(info, list):
-                _info = [
-                    i.detach().cpu().item() if torch.is_tensor(i) else i for i in info
-                ]
-            else:
-                _info = (
-                    info.detach().mean().cpu().item() if torch.is_tensor(info) else info
-                )
-            _info_list.append(_info)
+        self._maybe_report(total_loss, info, reward)
 
-        if self.monitor:
-            now = time.time()
-            if now - self.last_report_monitor_time >= Config.LOG_INTERVAL:
-                results['value_loss'] = round(_info_list[1], 2)
-                results['policy_loss'] = round(_info_list[2], 2)
-                results['entropy_loss'] = round(_info_list[3], 2)
+    # ----------------------------------------------------------- loss
+    def _compute_loss(self, new_probs, value_logits, old_action, old_prob, adv, td_return):
+        # ---- value loss (HL-Gauss cross-entropy) ----
+        value_loss = self.hl_gauss(value_logits, td_return).mean()
 
-                results['reward'] = _info_list[-1]
+        # ---- entropy ----
+        entropy_loss = -(new_probs * torch.log(new_probs.clamp(1e-9, 1.0))).sum(-1).mean()
 
-                results['diy_3'] = round(_info_list[4], 2)
-                results['diy_4'] = round(_info_list[5], 2)
-                results['diy_5'] = round(_info_list[0], 2)
-                self.monitor.put_data({os.getpid(): results})
-                self.last_report_monitor_time = now
+        # ---- importance ratio (log-space) ----
+        new_prob = torch.gather(new_probs, dim=-1, index=old_action.view(-1, 1))
+        ratio = torch.exp(
+            torch.log(new_prob.clamp(1e-9, 1.0)) - torch.log(old_prob.clamp(1e-9, 1.0))
+        )
+        ratio = ratio.clamp(0.0, 3.0)
 
-    def compute_loss(self, data_list, rst_list):
-        (
-            feature,
-            reward,
-            old_value,
-            tdret,
-            adv,
-            old_action,
-            old_prob,
-            legal_action,
-        ) = data_list
-        new_probs, value_logits = rst_list
-        # -------------------- Value loss --------------------
-        # (基于交叉熵的)价值损失
-        # 参考: https://arxiv.org/abs/2403.03950
-        value_entropy = self.hl_gauss_loss(value_logits, tdret)
-        value_loss = value_entropy.mean()
-        # -------------------- Entropy loss --------------------
-        # 熵损失
-        entropy = -new_probs * torch.log(new_probs.clamp(min=1e-9, max=1))
-        entropy_loss = entropy.mean()
-        # -------------------- Policy ratio --------------------
-        # 新旧策略的动作概率比值
-        # 此处将除法操作转换为"log之差的exp", 以减小精度误差
-        new_prob = torch.gather(new_probs, dim=-1, index=old_action.long())
-        new_log_prob = torch.log(new_prob.clamp(min=1e-9, max=1))
-        old_log_prob = torch.log(old_prob.clamp(min=1e-9, max=1))
-        ratio = torch.exp(new_log_prob - old_log_prob)
-        # 计算之前提前裁剪掉过大的数据, 以免发生数值溢出
-        ratio = torch.clamp(ratio, 0.0, 3.0)
-        # 优势归一化, 避免过大的策略梯度估计摧毁策略网络
+        # ---- advantage normalisation ----
         adv_std, adv_mean = torch.std_mean(adv)
-        if Config.WITH_ADV_NORM:
-            adv = (adv - adv_mean) / torch.clamp_min(
-                adv_std, 1e-7
-            )  # normalize advantage
-        # PPO损失
+        if ADV_NORM:
+            adv = (adv - adv_mean) / adv_std.clamp_min(1e-7)
+        adv = adv.view(-1, 1)
+
+        # ---- PPO clipped objective ----
         surr1 = ratio * adv
         surr2 = ratio.clamp(self.clip_low, self.clip_high) * adv
         if self.dual_clip > 0:
-            # 使用Dual-Clip
             clip1 = torch.minimum(surr1, surr2)
             clip2 = torch.maximum(clip1, self.dual_clip * adv)
-            clipped_objective = -torch.where(adv < 0, clip2, clip1)
+            clipped_obj = -torch.where(adv < 0, clip2, clip1)
         else:
-            clipped_objective = -torch.minimum(surr1, surr2)
-        policy_loss = clipped_objective.mean()
-        with torch.no_grad():
-            # 被Clipped掉的数据比率
-            clipped = ratio.gt(self.clip_high) | ratio.lt(self.clip_low)
-            clipfrac = clipped.float().mean().item()
-        # -------------------- Total loss --------------------
-        total_loss = (
-            policy_loss + self.vf_coef * value_loss - self.var_beta * entropy_loss
-        )
-        info_list = [
-            tdret.mean(),
-            value_loss,
-            policy_loss,
-            entropy_loss,
-            clipfrac,
-            adv_mean,
-            adv_std,
-            reward.mean(),
-        ]
-        return total_loss, info_list
+            clipped_obj = -torch.minimum(surr1, surr2)
+        policy_loss = clipped_obj.mean()
 
+        with torch.no_grad():
+            clipfrac = (ratio.gt(self.clip_high) | ratio.lt(self.clip_low)).float().mean().item()
+
+        # ---- total ----
+        total_loss = policy_loss + self.vf_coef * value_loss - self.entropy_coef * entropy_loss
+
+        info = {
+            "value_loss": value_loss.detach(),
+            "policy_loss": policy_loss.detach(),
+            "entropy": entropy_loss.detach(),
+            "clipfrac": clipfrac,
+            "adv_mean": adv_mean.item(),
+            "adv_std": adv_std.item(),
+            "td_return_mean": td_return.mean().item(),
+        }
+        return total_loss, info
+
+    # ----------------------------------------------------------- monitor
+    def _maybe_report(self, total_loss, info, reward):
+        now = time.time()
+        if now - self.last_report_time < LOG_INTERVAL:
+            return
+        self.last_report_time = now
+
+        results = {
+            "total_loss": round(total_loss.item(), 4),
+            "value_loss": round(info["value_loss"].item(), 4),
+            "policy_loss": round(info["policy_loss"].item(), 4),
+            "entropy": round(info["entropy"].item(), 4),
+            "clipfrac": round(info["clipfrac"], 4),
+            "adv_mean": round(info["adv_mean"], 4),
+            "reward": round(reward.mean().item(), 4),
+        }
+
+        if self.logger:
+            self.logger.info(
+                f"[train step={self.train_step}] "
+                f"loss={results['total_loss']} "
+                f"pi={results['policy_loss']} "
+                f"vf={results['value_loss']} "
+                f"ent={results['entropy']} "
+                f"clip={results['clipfrac']}"
+            )
+        if self.monitor:
+            self.monitor.put_data({os.getpid(): results})
+
+    # ----------------------------------------------------------- mode helpers
+    def set_train_mode(self):
+        self.model.set_train_mode()
+
+    def set_eval_mode(self):
+        self.model.set_eval_mode()

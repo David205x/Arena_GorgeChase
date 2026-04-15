@@ -98,91 +98,30 @@ class Config:
     # 固定Buff位置 (暂时不用, 现在的配置是随机Buff位置)
     BUFF_POS = 49, 28
     """****************************** 特征维度 ******************************"""
-    # 最大的宝箱数量 (如果宝箱数量超过它, 则不会被纳入特征)
-    NUM_TREASURE_MAX = 9
-    # 最大的Organ数量: 终点 + Buff + 宝箱
-    NUM_ORGAN_MAX = 1 + 1 + NUM_TREASURE_MAX
-    # Buff剩余生效时间的尺度编码大小
-    DIM_BUFF_SUSTAIN_ENCODE = math.floor(math.sqrt(BUFF_SUSTAIN_TIME))
-    # Buff冷却时间的尺度编码大小
-    DIM_BUFF_COOLDOWN_ENCODE = math.floor(math.sqrt(BUFF_COOLDOWN_TIME - 1))
-    # 闪现冷却时间的尺度编码大小
-    DIM_SKILL_COOLDOWN_ENCODE = math.floor(math.sqrt(SKILL_COOLDOWN_TIME - 1))
-    # Organ与智能体之间L2距离的尺度编码大小
-    DIM_RELATIVE_DIST_ENCODE = math.floor(math.sqrt(1.41 * MAP_LEN))
-    # 坐标二进制编码的长度
-    DIM_COORD_BINARY = (MAP_LEN - 1).bit_length()
-    """********** Organ特征 **********"""
-    DIM_FEATURE_ORGAN = (
-        # Organ种类的onehot编码 (宝箱/Buff/终点)
-        3
-        # Organ状态 (绝对坐标是否已知, 是否可拾取(这条是专门针对Buff的))
-        + 2
-        # 相对距离 (归一化的距离, 归一化的相对x/z坐标, 归一化的绝对x/z坐标)
-        + 5
-        # L2距离的尺度编码
-        + (DIM_RELATIVE_DIST_ENCODE + 1)
-        # Organ绝对x/z坐标的二进制编码
-        + 2 * (DIM_COORD_BINARY)
-        # 相对方向的OneHot编码
-        + 8
-        # 相对距离的OneHot编码
-        + 5
-    )
-    """********** 向量特征 **********"""
-    DIM_FEATURE_VECTOR = (
-        # 智能体绝对x/z坐标的二进制编码
-        2 * DIM_COORD_BINARY
-        # 智能体自身状态 (闪现状态, Buff状态, 闪现冷却, Buff冷却)
-        + 4
-        # Buff剩余生效时间的尺度编码
-        + (DIM_BUFF_SUSTAIN_ENCODE + 1)
-        # Buff冷却时间的尺度编码
-        + (DIM_BUFF_COOLDOWN_ENCODE + 1)
-        # 闪现冷却时间的尺度编码
-        + (DIM_SKILL_COOLDOWN_ENCODE + 1)
-        # 剩余宝箱数量的OneHot编码
-        + (NUM_TREASURE_MAX + 1)
-    )
-    """********** 视觉特征 **********"""
-    # 视觉特征通道数 (障碍, 记忆, 宝箱, Buff, 终点)
-    DIM_VISION_CHANNELS = 5
-    DIM_FEATURE_VISION = VISION_SIZE * VISION_SIZE * DIM_VISION_CHANNELS
-    """********** 完整特征 **********"""
-    FEATURES = [
-        # 向量特征
-        DIM_FEATURE_VECTOR,
-        # N个Organ特征
-        NUM_ORGAN_MAX * DIM_FEATURE_ORGAN,
-        # N个Organ特征掩码, 指示了当前位置的Organ是否可用
-        NUM_ORGAN_MAX,
-        # 视觉特征
-        DIM_FEATURE_VISION,
-    ]
+    # 标量特征维度 (obs.construct_obs_scaler 输出)
+    SCALAR_DIM = 134
+    # 局部地图: 8通道 × 21 × 21
+    LOCAL_CH = 8
+    LOCAL_H = VISION_SIZE        # 21
+    LOCAL_W = VISION_SIZE        # 21
+    LOCAL_FLAT = LOCAL_CH * LOCAL_H * LOCAL_W   # 3528
+    # 全局地图: 4通道 × 64 × 64
+    GLOBAL_CH = 4
+    GLOBAL_DS = 64
+    GLOBAL_FLAT = GLOBAL_CH * GLOBAL_DS * GLOBAL_DS   # 16384
+    # 观测打平后总维度 (scalar + local_flat + global_flat)
+    OBS_FLAT_DIM = SCALAR_DIM + LOCAL_FLAT + GLOBAL_FLAT   # 20046
     """****************************** 数据流相关(勿修改) ******************************"""
-    # 开悟框架会先将特征flatten以便存储, 而优化/推理时则需要先将展平的特征恢复到原始形状
-    FEATURE_SPLIT_SHAPE = FEATURES
-    FEATURE_LEN = sum(FEATURE_SPLIT_SHAPE)
-    # PPO专用的样本布局, 构造过程可见definition.py
     DATA_SPLIT_SHAPE = [
-        # 观测
-        FEATURE_LEN,
-        # 奖励
-        VALUE_NUM,
-        # 价值网络输出
-        VALUE_NUM,
-        # TD(λ)价值估计
-        VALUE_NUM,
-        # GAE优势估计
-        VALUE_NUM,
-        # 执行的动作
-        ACTION_LEN,
-        # 该动作对应的动作概率
-        ACTION_LEN,
-        # 合法动作列表
-        ACTION_NUM,
+        OBS_FLAT_DIM,      # obs (scalar + local_map + global_map flattened)
+        VALUE_NUM,         # reward
+        VALUE_NUM,         # value  (scalar expected value)
+        VALUE_NUM,         # td_return
+        VALUE_NUM,         # advantage
+        ACTION_LEN,        # action
+        ACTION_LEN,        # prob   (taken action probability)
+        ACTION_NUM,        # legal_action
     ]
-    # 一个样本的大小
     data_len = sum(DATA_SPLIT_SHAPE)
 
     # learner上reverb样本的输入维度

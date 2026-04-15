@@ -1,4 +1,5 @@
 import json
+from dataclasses import asdict, is_dataclass
 import numpy as np
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -34,6 +35,7 @@ class WebControlServer:
             "last_reward": 0.0,
             "status": "initializing",
             "obs": None,
+            "extractor": None,
             "ui": {},
             "action_range": [0, ACTION_COUNT - 1],
         }
@@ -45,11 +47,12 @@ class WebControlServer:
         if self.logger:
             self.logger.info(f"web control server started at http://{SERVER_HOST}:{SERVER_PORT}")
 
-    def publish_obs(self, obs, episode, step, status, last_reward=0.0, done=False):
+    def publish_obs(self, obs, episode, step, status, last_reward=0.0, done=False, extractor_view=None):
         with self._cv:
             if episode != self._state.get("episode"):
                 self.reset_episode_history()
             obs_json = self._to_jsonable(obs)
+            extractor_json = self._to_jsonable(extractor_view) if extractor_view is not None else None
             self._update_trail(obs_json)
             self._state.update(
                 episode=episode,
@@ -58,7 +61,8 @@ class WebControlServer:
                 last_reward=self._normalize_reward(last_reward),
                 status=status,
                 obs=obs_json,
-                ui=self._build_ui_state(obs_json),
+                extractor=extractor_json,
+                ui=self._build_ui_state(obs_json, extractor_json),
             )
             self._cv.notify_all()
 
@@ -133,7 +137,7 @@ class WebControlServer:
         template = TEMPLATE_PATH.read_text(encoding="utf-8")
         return template.replace("__ACTION_GROUPS__", json.dumps(ACTION_GROUPS, ensure_ascii=False))
 
-    def _build_ui_state(self, obs):
+    def _build_ui_state(self, obs, extractor=None):
         observation = obs.get("observation") or {}
         frame_state = observation.get("frame_state") or {}
         env_info = observation.get("env_info") or {}
@@ -173,7 +177,37 @@ class WebControlServer:
             "minimap": self._build_minimap(map_id, hero_pos, size),
             "trail": list(self._trail),
             "raw_preview": json.dumps(obs, ensure_ascii=False, indent=2)[:3000],
+            "extractor": self._build_extractor_ui(extractor),
         }
+
+    def _build_extractor_ui(self, extractor):
+        extractor = extractor or {}
+        obs_state = extractor.get("obs_state") or {}
+        reward_state = extractor.get("reward_state") or {}
+        reward_info = extractor.get("reward_info") or {}
+        monitor_metrics = extractor.get("monitor_metrics") or {}
+        debug_state = extractor.get("debug_state") or {}
+        return {
+            "available": bool(extractor.get("available", False)),
+            "error": extractor.get("error") or {},
+            "obs": obs_state,
+            "reward": reward_state,
+            "reward_info": reward_info,
+            "monitor": monitor_metrics,
+            "debug": debug_state,
+            "previews": {
+                "obs": self._preview_json(obs_state, limit=20000),
+                "reward": self._preview_json(reward_state, limit=20000),
+                "reward_info": self._preview_json(reward_info, limit=8000),
+                "monitor": self._preview_json(monitor_metrics, limit=12000),
+                "debug": self._preview_json(debug_state, limit=24000),
+            },
+        }
+
+    def _preview_json(self, payload, limit=12000):
+        if not payload:
+            return ""
+        return json.dumps(payload, ensure_ascii=False, indent=2)[:limit]
 
     def reset_episode_history(self):
         self._trail = []
@@ -256,6 +290,8 @@ class WebControlServer:
     def _to_jsonable(self, value):
         if isinstance(value, (str, int, float, bool)) or value is None:
             return value
+        if is_dataclass(value):
+            return self._to_jsonable(asdict(value))
         if isinstance(value, np.generic):
             return value.item()
         if isinstance(value, np.ndarray):
@@ -264,6 +300,8 @@ class WebControlServer:
             return {str(k): self._to_jsonable(v) for k, v in value.items()}
         if isinstance(value, (list, tuple)):
             return [self._to_jsonable(v) for v in value]
+        if isinstance(value, set):
+            return [self._to_jsonable(v) for v in sorted(value)]
         return repr(value)
 
     def _normalize_reward(self, reward):

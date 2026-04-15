@@ -27,7 +27,6 @@
   - 闪现是否可用
   - 闪现冷却时间
 - 历史行为反馈
-  - 有效性：上次动作是否产生有效移动
   - 安全性：与最近怪物的距离是否增加
   - 资源获得：是否拾取到了资源
   - 地图探索：是否带来地图新探索
@@ -35,10 +34,9 @@
 
 - 行为后果：对于下一步
   - 普通移动8个方向可行性
-  - 各动作是否产生有效位移
   - 闪现的预期8个位置坐标
   - 闪现带来的等价位移长度
-  - 各动作的先验偏好
+  - 闪现是否穿墙
 
 #### 4.3 怪物压力观测
 
@@ -108,56 +106,74 @@
 #### 1.1 英雄自身状态
 | 名称 | 来源 |
 |------|------|
-| 英雄绝对坐标 | `frame_state.heroes.pos` |
-| 英雄 buff 持续时间 | `frame_state.heroes.buff_remaining_time` |
-| 英雄是否可闪现 | `frame_state.heroes.flash_cooldown` |
-| 英雄闪现冷却时间 | `frame_state.heroes.flash_cooldown` |
-| 上次动作是否产生有效移动 | 上一帧与当前帧英雄位置差 / 动作结果缓存 |
-| 上次动作后最近怪物距离是否增加 | 上一帧与当前帧最近怪物距离比较 |
-| 上次动作是否拾取资源 | `env_info.treasures_collected` / `env_info.collected_buff` 增量 |
-| 上次动作是否带来地图新探索 | 当前帧与上一帧探索区域比较 |
-| 上次动作带来的环境收益 | `reward.reward` 或环境得分增量 |
-| 普通移动 8 个方向可行性 | `map_info` + 移动规则派生 |
-| 各动作是否产生有效位移 | `map_info` + 动作结果派生 |
-| 闪现的预期 8 个位置坐标 | `map_info` + 闪现规则派生 |
-| 闪现带来的等价位移长度 | 闪现预期落点与当前位置差 |
-| 各动作的先验偏好 | 局部地图 / 怪物压力 / 资源机会综合派生 |
+| 英雄绝对坐标 | `raw.hero.x / raw.hero.z` |
+| 英雄当前速度 | `current.hero_speed` |
+| 英雄 buff 持续时间 | `raw.hero.buff_remaining_time` |
+| 英雄是否可闪现 | `raw.hero.can_flash` |
+| 英雄闪现冷却时间 | `raw.hero.flash_cooldown` |
+|  |  |
+| 上次动作带来的位置差向量 | 当前实现尚未单独提供，需要由上一帧与当前帧英雄位置自行相减 |
+| 上次动作后最近怪物距离是否增加 | `action_last.nearest_monster_distance_increased` |
+| 上次动作是否拾取宝箱 | `action_last.picked_treasure` |
+| 上次动作是否拾取buff | `action_last.picked_buff` |
+| 上次动作带来的地图探索率增量 | 当前实现未直接提供探索率增量；已提供 `map_new_discover` / `action_last.explored_new_area` |
+| 上次动作带来的环境收益 | `action_last.reward_delta` |
+|  |  |
+| 普通移动 8 个方向可行性mask | `action_predict.move_valid_mask` |
+| 闪现动作8个方向的可行性mask | `action_predict.flash_valid_mask` |
+| 闪现带来的距离 | `action_predict.flash_distance` |
+| 闪现是否穿墙 | `action_predict.flash_across_wall` |
 
 #### 1.2 怪物压力观测
 | 名称 | 来源 |
 |------|------|
-| 怪物是否存在 | `frame_state.monsters` |
-| 怪物相对坐标 | `frame_state.monsters[].pos` 与英雄位置差 |
-| 怪物切比雪夫距离 | 怪物位置与英雄位置派生 |
-| 怪物是否为最近怪物 | 多只怪物距离比较派生 |
-| 怪物速度 | `frame_state.monsters[].speed` |
-| 怪物动作趋势下一步方向 | 怪物历史轨迹 / 寻路规则复现派生 |
-| 怪物夹击趋势 | 两只怪物相对英雄方向关系 + 距离衰减派生 |
-| 活动空间压缩趋势 | 局部空间结构 + 怪物位置联合派生 |
+| 怪物1是否存在 |                                                              |
+| 怪物1出现倒计时 | 0                                                            |
+| 怪物1相对方位向量 |  |
+| 怪物1相对距离 | 视野内按欧氏距离/30算，30格内视野外的(桶0)按照0.85算，剩下的直接桶编号 |
+| 怪物1速度 |  |
+| 怪物1是否为最近怪物 |  |
+| 怪物2是否存在 |  |
+| 怪物2出现倒计时 |  |
+| 怪物2相对方位向量 |  |
+| 怪物2相对距离 | 视野内按欧氏距离/30算，30格内视野外的(桶0)按照0.85算，剩下的直接桶编号 |
+| 怪物2速度 |  |
+| 怪物2是否为最近怪物 |  |
+|  |  |
+| 两只怪物的方位向量夹角 |                                                              |
+| 怪物平均距离           |                                                              |
 
 #### 1.3 宝箱与 buff 机会观测
 | 名称 | 来源 |
 |------|------|
-| 最近宝箱方向和距离 | 当前可见或历史已知宝箱位置与英雄位置派生 |
-| 最近 buff 方向和距离 | 当前可见或历史已知 buff 位置与英雄位置派生 |
-| 资源安全性 | 资源方向与怪物方向/距离联合派生 |
-| 值得探索的坐标 | 全局探索状态 / 未探索区域分布派生 |
-| 当前地图探索程度 | 全图探索统计派生 |
-| 当前宝箱、buff 发现进度 | 已知资源数量与总资源数量比较 |
-| 当前宝箱收集进度 | `env_info.treasures_collected` / `env_info.total_treasure` |
+| 当前宝箱发现进度 | `resource_summary.treasure_discovered_count / raw.total_treasure`（需 obs 侧自行归一化） |
+| 当前宝箱收集进度 | `resource_summary.treasure_progress` |
+| 最近宝箱方位向量 | 当前实现未直接提供，需由英雄坐标与 `nearest_known_treasure` 坐标自行计算 |
+| 最近宝箱距离 | 当前实现优先使用基于 `map_full` 的寻路距离；若暂时不可达或未实现，则退回欧氏距离 |
+| 宝箱1的的存在性 | 当前实现可由 `treasure_full` 推断：`None=未发现`，`status=0=已领取`，`status=1=发现未领取` |
+| 宝箱1的相对方位向量 | 当前实现未直接提供，需由英雄坐标与对应宝箱坐标自行计算 |
+| 宝箱1的距离 | 当前实现优先使用基于 `map_full` 的寻路距离；若暂时不可达或未实现，则退回欧氏距离 |
+| ...(重复10个) | 基于 `treasure_full` 的固定 key 槽位展开 |
+|  |  |
+| 当前buff发现进度 | `resource_summary.buff_discovered_count / raw.total_buff`（需 obs 侧自行归一化） |
+| 当前buff收集进度 | `resource_summary.buff_progress` |
+| 最近buff方位向量 | 当前实现未直接提供，需由英雄坐标与 `nearest_known_buff` 坐标自行计算 |
+| 最近buff距离 | 当前实现优先使用基于 `map_full` 的寻路距离；若暂时不可达或未实现，则退回欧氏距离 |
+| buff 1的的存在性 | 当前实现可由 `buff_full` 推断：`None=未发现`，`status=0/冷却中=不可立即获取`，`status=1且cooldown=0=发现且可获取` |
+| buff 1的相对方位向量 | 当前实现未直接提供，需由英雄坐标与对应 buff 坐标自行计算 |
+| buff 1的距离 | 当前实现优先使用基于 `map_full` 的寻路距离；若暂时不可达或未实现，则退回欧氏距离 |
+| ...(重复2个) | 基于 `buff_full` 的固定 key 槽位展开 |
 
 #### 1.4 局部地图与空间观测
 | 名称 | 来源 |
 |------|------|
-| 局部地图矩阵 `21*21*n` | `map_info` 及其多通道扩展 |
-| 全局地图矩阵 `128*128*n` 下采样表达 | 全图探索状态 / 全局地图缓存 |
-| 八方向通路长度 | 局部或全局地图可通行结构派生 |
-| 可活动空间 | 局部邻域或扇区可行动格数量派生 |
-| 通路开阔度 | 连通可行动格数量派生 |
+| 局部地图矩阵 `21*21*n` | 当前实现可直接提供 `local_map_layers`；`as_stack()` 当前包含 `obstacle、hero、monster、treasure、buff、visit、flash_landing`，`visit_coverage` 单独暴露 |
+| 全局地图矩阵 `128*128*n` 下采样表达 | 当前实现可直接提供 `map_full`、`build_global_treasure_available_map()`、`build_global_buff_known_map()`、`visit_count / visit_coverage`，下采样需 obs 侧再做 |
+| 八方向通路长度 | `space_summary.corridor_lengths` |
 
 #### 1.5 阶段信息与节奏信息观测
 | 名称 | 来源 |
 |------|------|
-| 当前步数 | `step_no` |
-| 当前阶段 | 当前步数 + 第二只怪是否出现 + 怪物是否加速派生 |
-| 距离下个重要阶段的倒计时 | 当前步数与关键阶段步数差 |
+| 当前步数进度 | `raw.step / raw.max_step` |
+| 第二阶段倒计时 | 当前实现可直接用 `stage_info.steps_to_next_stage`；若 obs 需要归一化，需在 obs 侧再除以对应阈值 |
+| 第三阶段倒计时 | 当前实现可直接用 `stage_info.steps_to_next_stage`；若 obs 需要归一化，需在 obs 侧再除以对应阈值 |
