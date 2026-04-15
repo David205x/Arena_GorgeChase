@@ -79,14 +79,15 @@ DEATH_SAME_SIDE_REDUCE   = 0.10
 
 # ======================== main entry ========================
 
-def compute_reward(data: dict) -> float:
+def compute_reward(data: dict) -> tuple[float, dict]:
     """Compute shaped reward from ``extractor.build_reward_state()``.
 
-    Returns a scalar float reward to be stored in ``SampleData.reward``.
+    Returns:
+        (total_reward, reward_info) where reward_info contains all sub-components.
     """
     raw: RawObs | None = data["raw"]
     if raw is None:
-        return 0.0
+        return 0.0, {}
 
     terminated: bool = data["terminated"]
     truncated: bool = data["truncated"]
@@ -103,9 +104,20 @@ def compute_reward(data: dict) -> float:
 
     survival = _survival(rd, ms, ss, al, data)
     explore = _explore(rd, rs, al)
-    terminal = _terminal(terminated, truncated, abnormal_truncated, si, ms, ss)
+    terminal_value, terminal_info = _terminal(terminated, truncated, abnormal_truncated, si, ms, ss)
 
-    return alpha * survival + (1.0 - alpha) * explore + terminal[0]
+    total = alpha * survival + (1.0 - alpha) * explore + terminal_value
+
+    reward_info = {
+        "alpha": round(alpha, 4),
+        "survival": round(survival, 6),
+        "explore": round(explore, 6),
+        "terminal": round(terminal_value, 6),
+        "total": round(total, 6),
+        **terminal_info,
+    }
+
+    return total, reward_info
 
 
 # ======================== component functions ========================
