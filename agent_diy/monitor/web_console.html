@@ -567,93 +567,14 @@
                         </div>
                     </details>
                 </section>
-                <section id="page-obs" class="page extractor-page">
-                    <div class="page-top">
-                        <div class="facts dense facts-4" id="obs-facts"></div>
-                    </div>
-                    <div class="page-bottom four-cols">
-                    <details class="fold span-4" open data-fold-key="page-obs.breakdown">
-                        <summary>观测分组 (Obs Breakdown)</summary>
-                        <div class="fold-body">
-                            <div id="obs-breakdown"></div>
-                        </div>
-                    </details>
-                    <details class="fold span-2" open data-fold-key="page-obs.matrices">
-                        <summary>局部矩阵通道可视化</summary>
-                        <div class="fold-body">
-                            <div id="obs-matrices" class="matrix-gallery"></div>
-                        </div>
-                    </details>
-                    <details class="fold span-2" data-fold-key="page-obs.tree">
-                        <summary>Obs 全量字段</summary>
-                        <div class="fold-body">
-                            <div id="obs-tree" class="tree"></div>
-                        </div>
-                    </details>
-                    <details class="fold span-4" data-fold-key="page-obs.preview">
-                        <summary>Obs JSON 预览</summary>
-                        <div class="fold-body">
-                            <pre id="obs-preview" class="raw"></pre>
-                        </div>
-                    </details>
-                    </div>
+                <section id="page-obs" class="page">
+                    <div id="obs-content" style="overflow:auto; padding:12px 14px; display:grid; gap:10px; align-content:start;"></div>
                 </section>
-                <section id="page-reward" class="page extractor-page">
-                    <div class="page-top">
-                        <div class="facts dense facts-4" id="reward-facts"></div>
-                    </div>
-                    <div class="page-bottom four-cols">
-                    <details class="fold span-4" open data-fold-key="page-reward.breakdown">
-                        <summary>奖励细分 (Reward Breakdown)</summary>
-                        <div class="fold-body">
-                            <div id="reward-breakdown"></div>
-                        </div>
-                    </details>
-                    <details class="fold span-3" data-fold-key="page-reward.tree">
-
-                        <summary>Reward 全量字段</summary>
-                        <div class="fold-body">
-                            <div id="reward-tree" class="tree"></div>
-                        </div>
-                    </details>
-                    <details class="fold span-1" data-fold-key="page-reward.preview">
-                        <summary>Reward JSON 预览</summary>
-                        <div class="fold-body">
-                            <pre id="reward-preview" class="raw"></pre>
-                        </div>
-                    </details>
-                    </div>
+                <section id="page-reward" class="page">
+                    <div id="reward-content" style="overflow:auto; padding:12px 14px; display:grid; gap:10px; align-content:start;"></div>
                 </section>
-                <section id="page-monitor" class="page extractor-page">
-                    <div class="page-top">
-                        <div class="facts dense facts-4" id="monitor-facts"></div>
-                    </div>
-                    <div class="page-bottom four-cols">
-                    <details class="fold span-2" open data-fold-key="page-monitor.matrices">
-                        <summary>全局矩阵可视化</summary>
-                        <div class="fold-body">
-                            <div id="debug-matrices" class="matrix-gallery"></div>
-                        </div>
-                    </details>
-                    <details class="fold span-2" open data-fold-key="page-monitor.monitor-tree">
-                        <summary>监控指标全量字段</summary>
-                        <div class="fold-body">
-                            <div id="monitor-tree" class="tree"></div>
-                        </div>
-                    </details>
-                    <details class="fold span-3" data-fold-key="page-monitor.debug-tree">
-                        <summary>Debug 状态全量字段</summary>
-                        <div class="fold-body">
-                            <div id="debug-tree" class="tree"></div>
-                        </div>
-                    </details>
-                    <details class="fold span-1" data-fold-key="page-monitor.preview">
-                        <summary>Debug JSON 预览</summary>
-                        <div class="fold-body">
-                            <pre id="debug-preview" class="raw"></pre>
-                        </div>
-                    </details>
-                    </div>
+                <section id="page-monitor" class="page">
+                    <div style="padding:24px; color:var(--m); font-size:13px;">暂未启用</div>
                 </section>
             </div>
         </aside>
@@ -1062,203 +983,197 @@
             });
         }
 
+        function flattenObj(obj, prefix) {
+            var rows = [];
+            Object.entries(obj || {}).forEach(function (entry) {
+                var k = entry[0], v = entry[1];
+                var key = prefix ? prefix + "." + k : k;
+                if (v === null || v === undefined) {
+                    rows.push([key, "-"]);
+                } else if (typeof v === "object" && !Array.isArray(v)) {
+                    rows.push.apply(rows, flattenObj(v, key));
+                } else if (Array.isArray(v) && v.length <= 24 && v.every(function (x) { return typeof x !== "object"; })) {
+                    rows.push([key, v.map(function (x) { return formatValue(x); }).join(", ")]);
+                } else if (isScalar(v)) {
+                    rows.push([key, formatValue(v)]);
+                }
+            });
+            return rows;
+        }
+
+        function renderObsFold(root, title, data) {
+            if (!data || typeof data !== "object" || !Object.keys(data).length) return;
+            var rows = flattenObj(data, "");
+            if (!rows.length) return;
+            var details = document.createElement("details");
+            details.className = "fold";
+            bindFoldState(details, "obs-page." + title, true);
+            var summary = document.createElement("summary");
+            summary.textContent = title;
+            details.appendChild(summary);
+            var body = document.createElement("div");
+            body.className = "fold-body";
+            var table = document.createElement("div");
+            table.className = "obs-kv";
+            rows.forEach(function (pair) {
+                var keyEl = document.createElement("div");
+                keyEl.className = "obs-kv-key";
+                keyEl.textContent = pair[0];
+                var valEl = document.createElement("div");
+                valEl.className = "obs-kv-val";
+                valEl.textContent = pair[1];
+                table.appendChild(keyEl);
+                table.appendChild(valEl);
+            });
+            body.appendChild(table);
+            details.appendChild(body);
+            root.appendChild(details);
+        }
+
+        function renderObsMapFold(root, title, layers) {
+            if (!layers || typeof layers !== "object") return;
+            var matrices = {};
+            Object.entries(layers).forEach(function (entry) {
+                if (isNumericMatrix(entry[1])) matrices[entry[0]] = entry[1];
+            });
+            if (!Object.keys(matrices).length) return;
+            var details = document.createElement("details");
+            details.className = "fold";
+            bindFoldState(details, "obs-page." + title, true);
+            var summary = document.createElement("summary");
+            summary.textContent = title + " (" + Object.keys(matrices).length + " ch)";
+            details.appendChild(summary);
+            var body = document.createElement("div");
+            body.className = "fold-body";
+            var gallery = document.createElement("div");
+            gallery.className = "matrix-gallery";
+            Object.entries(matrices).forEach(function (entry) {
+                var name = entry[0], matrix = entry[1];
+                var card = document.createElement("div");
+                card.className = "matrix-card";
+                var rows = matrix.length, cols = rows ? matrix[0].length : 0;
+                card.innerHTML = '<div class="matrix-title"><span>' + name + '</span><span>' + rows + '×' + cols + '</span></div>';
+                var canvas = document.createElement("canvas");
+                canvas.className = "matrix-canvas";
+                drawMatrixOnCanvas(canvas, matrix);
+                card.appendChild(canvas);
+                gallery.appendChild(card);
+            });
+            body.appendChild(gallery);
+            details.appendChild(body);
+            root.appendChild(details);
+        }
+
         function renderObsPage(extractor) {
-            const obs = extractor.obs || {};
-            const hero = obs.hero || {};
-            const si = obs.stage_info || {};
-            const ms = obs.monster_summary || {};
-            const rs = obs.resource_summary || {};
-
-            $("obs-facts").innerHTML = [
-                fact("hero", `${hero.x ?? "-"}, ${hero.z ?? "-"}`),
-                fact("speed", obs.hero_speed),
-                fact("stage", si.stage),
-                fact("alpha", si.alpha),
-                fact("monsters", ms.monster_count),
-                fact("nearest_m", ms.nearest_monster_distance),
-                fact("treasure_path", rs.nearest_known_treasure_distance_path),
-                fact("buff_path", rs.nearest_known_buff_distance_path),
-            ].join("");
-
-            renderObsBreakdown(obs);
-
-            const localLayers = (obs.local_map_layers && typeof obs.local_map_layers === "object") ? obs.local_map_layers : {};
-            renderMatrixGallery("obs-matrices", localLayers);
-            renderObjectTree("obs-tree", obs, {
-                local_map_layers: "矩阵已在上方可视化展示",
-                local_map_stack: "矩阵堆栈不直接展开，已通过 local_map_layers 可视化替代",
-            });
-            $("obs-preview").textContent = extractor.previews?.obs || "";
-        }
-
-        function renderObsBreakdown(obs) {
-            const root = $("obs-breakdown");
+            var obs = extractor.obs || {};
+            var root = $("obs-content");
             root.innerHTML = "";
-            const groups = [
-                { title: "Hero", source: obs.hero || {}, keys: ["x", "z", "can_flash", "flash_cooldown", "buff_remaining_time"] },
-                { title: "Last Action Feedback", source: obs.action_last || {}, keys: ["last_action_id", "moved", "moved_delta", "nearest_monster_distance_increased", "picked_treasure", "picked_buff", "explored_new_area", "map_explore_rate_delta"] },
-                { title: "Action Predict", source: obs.action_predict || {}, keys: ["move_valid_mask", "flash_valid_mask", "flash_distance", "flash_across_wall"] },
-                { title: "Monster", source: obs.monster_summary || {}, keys: ["monster_count", "nearest_monster_distance", "nearest_monster_distance_delta", "second_monster_distance", "average_monster_distance", "relative_direction_cosine", "monster1_exists", "monster1_relative_position", "monster1_distance_chebyshev", "monster1_speed", "monster2_exists", "monster2_relative_position", "monster2_distance_chebyshev", "monster2_speed"] },
-                { title: "Resource", source: obs.resource_summary || {}, keys: ["treasure_discovered_count", "treasure_progress", "nearest_known_treasure_direction", "nearest_known_treasure_distance_path", "nearest_known_treasure_distance_l2", "buff_discovered_count", "buff_progress", "nearest_known_buff_direction", "nearest_known_buff_distance_path", "nearest_known_buff_distance_l2"] },
-                { title: "Space", source: obs.space_summary || {}, keys: ["corridor_lengths", "traversable_space", "openness", "safe_direction_count", "traversable_space_delta", "is_dead_end", "is_corridor", "is_low_openness"] },
-                { title: "Stage", source: obs.stage_info || {}, keys: ["stage", "alpha", "has_second_monster", "is_speed_boost_stage", "steps_to_next_stage"] },
-            ];
-            groups.forEach(function(g) {
-                const section = document.createElement("div");
-                section.className = "obs-section";
-                const title = document.createElement("div");
-                title.className = "obs-section-title";
-                title.textContent = g.title;
-                section.appendChild(title);
-                const kv = document.createElement("div");
-                kv.className = "obs-kv";
-                g.keys.forEach(function(k) {
-                    const keyEl = document.createElement("div");
-                    keyEl.className = "obs-kv-key";
-                    keyEl.textContent = k;
-                    const valEl = document.createElement("div");
-                    valEl.className = "obs-kv-val";
-                    valEl.textContent = formatValue(g.source[k]);
-                    kv.appendChild(keyEl);
-                    kv.appendChild(valEl);
-                });
-                section.appendChild(kv);
-                root.appendChild(section);
-            });
-        }
-
-        function renderRewardPage(extractor) {
-            const reward = extractor.reward || {};
-            const ri = extractor.reward_info || {};
-
-            $("reward-facts").innerHTML = [
-                fact("total", ri.total),
-                fact("alpha", ri.alpha),
-                fact("survival×α", ri.survival_weighted),
-                fact("explore×(1-α)", ri.explore_weighted),
-                fact("terminal", ri.terminal),
-                fact("t_type", ri.t_type),
-                fact("flash_escape", ri.s_flash_escape),
-                fact("visit_count", ri.s_visit_count),
-            ].join("");
-
-            renderRewardBreakdown(ri);
-
-            renderObjectTree("reward-tree", reward);
-            $("reward-preview").textContent = extractor.previews?.reward || "";
-        }
-
-        function renderRewardBreakdown(ri) {
-            const root = $("reward-breakdown");
-            root.innerHTML = "";
-            if (!ri || !ri.total && ri.total !== 0) {
-                root.innerHTML = '<div class="item">暂无 reward_info 数据</div>';
+            if (!obs || !Object.keys(obs).length) {
+                root.innerHTML = '<div class="item">暂无 obs 数据</div>';
                 return;
             }
-            const groups = [
-                { title: "Weighted Sums", keys: [
-                    ["survival_weighted", ri.survival_weighted],
-                    ["explore_weighted", ri.explore_weighted],
-                    ["terminal", ri.terminal],
-                ]},
-                { title: "Survival Components (×α)", keys: [
-                    ["s_step_score", ri.s_step_score],
-                    ["s_monster_dist", ri.s_monster_dist],
-                    ["s_encircle", ri.s_encircle],
-                    ["s_space", ri.s_space],
-                    ["s_topology", ri.s_topology],
-                    ["s_no_move", ri.s_no_move],
-                    ["s_flash_low", ri.s_flash_low],
-                    ["s_flash_escape", ri.s_flash_escape],
-                    ["s_revisit", ri.s_revisit],
-                ]},
-                { title: "Explore Components (×(1-α))", keys: [
-                    ["e_treasure_score", ri.e_treasure_score],
-                    ["e_treasure_approach", ri.e_treasure_approach],
-                    ["e_map_explore", ri.e_map_explore],
-                ]},
-                { title: "Terminal Detail", keys: [
-                    ["t_death_stage_pen", ri.t_death_stage_pen],
-                    ["t_encircle_pen", ri.t_encircle_pen],
-                    ["t_dead_end_pen", ri.t_dead_end_pen],
-                    ["t_same_side_reduce", ri.t_same_side_reduce],
-                    ["t_complete_bonus", ri.t_complete_bonus],
-                ]},
+            var scalarGroups = [
+                { title: "Hero 状态", data: Object.assign({}, obs.hero || {}, { hero_speed: obs.hero_speed }) },
+                { title: "上步反馈 · Action Last", data: obs.action_last },
+                { title: "动作预测 · Action Predict", data: obs.action_predict },
+                { title: "怪物态势 · Monster Summary", data: obs.monster_summary },
+                { title: "资源汇总 · Resource Summary", data: obs.resource_summary },
+                { title: "空间态势 · Space Summary", data: obs.space_summary },
+                { title: "阶段信息 · Stage Info", data: obs.stage_info },
             ];
-            const allVals = groups.flatMap(function(g) { return g.keys.map(function(k) { return Math.abs(k[1] || 0); }); });
-            const maxAbs = Math.max(0.001, Math.max.apply(null, allVals));
+            scalarGroups.forEach(function (g) { renderObsFold(root, g.title, g.data); });
+            if (obs.treasure_full || obs.buff_full) {
+                var slots = {};
+                if (obs.treasure_full) slots.treasure_full = obs.treasure_full;
+                if (obs.buff_full) slots.buff_full = obs.buff_full;
+                renderObsFold(root, "资源缓存 · Resource Slots", slots);
+            }
+            renderObsMapFold(root, "局部地图通道 · Local Map Layers", obs.local_map_layers);
+            var globalMaps = {};
+            ["global_map_full", "global_visit_coverage", "global_treasure_available_map", "global_buff_known_map"]
+                .forEach(function (k) { if (obs[k] && isNumericMatrix(obs[k])) globalMaps[k] = obs[k]; });
+            if (Object.keys(globalMaps).length) {
+                renderObsMapFold(root, "全局地图 · Global Maps", globalMaps);
+            }
+            if (obs.legal_action) {
+                renderObsFold(root, "合法动作 · Legal Action", { legal_action: obs.legal_action });
+            }
+        }
 
-            groups.forEach(function(g) {
-                const section = document.createElement("div");
-                section.className = "rw-group";
-                const title = document.createElement("div");
-                title.className = "rw-group-title";
-                title.textContent = g.title;
-                section.appendChild(title);
-                g.keys.forEach(function(pair) {
-                    var label = pair[0], val = pair[1];
-                    if (val === undefined || val === null) return;
-                    var num = Number(val) || 0;
+        function renderRewardGroup(root, title, items) {
+            var details = document.createElement("details");
+            details.className = "fold";
+            bindFoldState(details, "reward-page." + title, true);
+            var summary = document.createElement("summary");
+            summary.textContent = title;
+            details.appendChild(summary);
+            var body = document.createElement("div");
+            body.className = "fold-body";
+            var numericItems = items.filter(function (p) { return typeof p[1] === "number"; });
+            var allAbs = numericItems.map(function (p) { return Math.abs(p[1] || 0); });
+            var maxAbs = Math.max(0.001, Math.max.apply(null, allAbs.length ? allAbs : [0.001]));
+            items.forEach(function (pair) {
+                var label = pair[0], val = pair[1];
+                if (typeof val === "number") {
+                    var num = val || 0;
                     var pct = Math.min(Math.abs(num) / maxAbs * 50, 50);
                     var row = document.createElement("div");
                     row.className = "rw-bar-row";
                     row.innerHTML =
-                        '<div class="rw-bar-label">' + label + '</div>' +
+                        '<div class="rw-bar-label">' + escapeHtml(label) + '</div>' +
                         '<div class="rw-bar-track">' +
                             '<div class="rw-bar-fill ' + (num >= 0 ? 'pos' : 'neg') + '" style="width:' + pct + '%;"></div>' +
                         '</div>' +
-                        '<div class="rw-bar-value">' + num.toFixed(4) + '</div>';
-                    section.appendChild(row);
-                });
-                root.appendChild(section);
+                        '<div class="rw-bar-value">' + num.toFixed(6) + '</div>';
+                    body.appendChild(row);
+                } else {
+                    var kv = document.createElement("div");
+                    kv.className = "rw-bar-row";
+                    kv.innerHTML =
+                        '<div class="rw-bar-label">' + escapeHtml(label) + '</div>' +
+                        '<div class="rw-bar-value" style="grid-column: span 2; text-align:left;">' + escapeHtml(formatValue(val)) + '</div>';
+                    body.appendChild(kv);
+                }
+            });
+            details.appendChild(body);
+            root.appendChild(details);
+        }
+
+        function renderRewardPage(extractor) {
+            var ri = extractor.reward_info || {};
+            var root = $("reward-content");
+            root.innerHTML = "";
+            if (!ri || !Object.keys(ri).length) {
+                root.innerHTML = '<div class="item">暂无 reward_info 数据</div>';
+                return;
+            }
+            var topItems = [], survItems = [], expItems = [], termItems = [];
+            Object.entries(ri).forEach(function (entry) {
+                var k = entry[0], v = entry[1];
+                if (k.startsWith("s_")) survItems.push([k, v]);
+                else if (k.startsWith("e_")) expItems.push([k, v]);
+                else if (k.startsWith("t_")) termItems.push([k, v]);
+                else topItems.push([k, v]);
+            });
+            var groups = [
+                { title: "总览 · Overview", items: topItems },
+                { title: "Survival 子项 (×α)", items: survItems },
+                { title: "Explore 子项 (×(1-α))", items: expItems },
+                { title: "Terminal 子项", items: termItems },
+            ];
+            groups.forEach(function (g) {
+                if (!g.items.length) return;
+                renderRewardGroup(root, g.title, g.items);
             });
         }
 
-        function renderMonitorPage(extractor) {
-            const monitor = extractor.monitor || {};
-            const debug = extractor.debug || {};
-            $("monitor-facts").innerHTML = [
-                fact("steps", monitor.episode_steps),
-                fact("stage", monitor.final_stage),
-                fact("total_score", monitor.final_total_score),
-                fact("result", monitor.result_code),
-                fact("completed", monitor.completed),
-                fact("speedup", monitor.speedup_reached),
-                fact("flash_esc", monitor.flash_escape_success_count),
-                fact("mean_margin", monitor.mean_capture_margin_path_estimate),
-            ].join("");
-            renderMatrixGallery("debug-matrices", {
-                map_full: debug.map_full,
-                visit_count: debug.visit_count,
-            });
-            renderObjectTree("monitor-tree", monitor);
-            renderObjectTree("debug-tree", debug, {
-                map_full: "矩阵已在上方可视化展示",
-                visit_count: "矩阵已在上方可视化展示",
-            });
-            $("debug-preview").textContent = extractor.previews?.debug || "";
-        }
+        function renderMonitorPage(extractor) {}
 
         function renderExtractorUnavailable(tabId, extractor) {
-            const message = extractor.error?.message || "Extractor 数据暂不可用";
-            if (tabId === "obs") {
-                $("obs-facts").innerHTML = `<div class="notice">${escapeHtml(message)}</div>`;
-                $("obs-matrices").innerHTML = "";
-                $("obs-tree").innerHTML = `<div class="item">${escapeHtml(JSON.stringify(extractor.error || {}, null, 2))}</div>`;
-                $("obs-preview").textContent = extractor.previews?.obs || "";
-            }
-            if (tabId === "reward") {
-                $("reward-facts").innerHTML = `<div class="notice">${escapeHtml(message)}</div>`;
-                $("reward-tree").innerHTML = `<div class="item">${escapeHtml(JSON.stringify(extractor.error || {}, null, 2))}</div>`;
-                $("reward-preview").textContent = extractor.previews?.reward || "";
-            }
-            if (tabId === "monitor") {
-                $("monitor-facts").innerHTML = `<div class="notice">${escapeHtml(message)}</div>`;
-                $("debug-matrices").innerHTML = "";
-                $("monitor-tree").innerHTML = `<div class="item">${escapeHtml(JSON.stringify(extractor.error || {}, null, 2))}</div>`;
-                $("debug-tree").innerHTML = "";
-                $("debug-preview").textContent = extractor.previews?.debug || "";
-            }
+            var message = (extractor.error || {}).message || "Extractor 数据暂不可用";
+            var html = '<div class="notice">' + escapeHtml(message) + '</div>';
+            if (tabId === "obs") $("obs-content").innerHTML = html;
+            if (tabId === "reward") $("reward-content").innerHTML = html;
         }
 
         function renderActiveTab(state) {

@@ -102,18 +102,22 @@ def compute_reward(data: dict) -> tuple[float, dict]:
 
     alpha = si.alpha
 
-    survival = _survival(rd, ms, ss, al, data)
-    explore = _explore(rd, rs, al)
+    survival, survival_info = _survival(rd, ms, ss, al, data)
+    explore, explore_info = _explore(rd, rs, al)
     terminal_value, terminal_info = _terminal(terminated, truncated, abnormal_truncated, si, ms, ss)
 
     total = alpha * survival + (1.0 - alpha) * explore + terminal_value
 
     reward_info = {
+        "total": round(total, 6),
         "alpha": round(alpha, 4),
         "survival": round(survival, 6),
+        "survival_weighted": round(alpha * survival, 6),
         "explore": round(explore, 6),
+        "explore_weighted": round((1.0 - alpha) * explore, 6),
         "terminal": round(terminal_value, 6),
-        "total": round(total, 6),
+        **{f"s_{k}": v for k, v in survival_info.items()},
+        **{f"e_{k}": v for k, v in explore_info.items()},
         **terminal_info,
     }
 
@@ -122,86 +126,92 @@ def compute_reward(data: dict) -> tuple[float, dict]:
 
 # ======================== component functions ========================
 
-def _survival(rd, ms: MonsterSummary, ss: SpaceSummary, al: ActionLast, data: dict) -> float:
+def _survival(rd, ms: MonsterSummary, ss: SpaceSummary, al: ActionLast, data: dict) -> tuple[float, dict]:
     """Survival-aligned shaping (§4.3-step, §4.4, §4.6)."""
-    r = 0.0
+    info: dict[str, float] = {}
 
-    # ---- §4.3  env step score  ↑🔊 ----
-    r += rd.step_score_delta * W_STEP_SCORE
+    step_score = rd.step_score_delta * W_STEP_SCORE
+    info["step_score"] = round(step_score, 6)
 
-    # ---- §4.4  nearest monster distance change  ±↑🔊 ----
+    monster_dist = 0.0
     if ms.nearest_monster_distance is not None and ms.nearest_monster_distance_delta is not None:
         danger = max(0.0, 1.0 - ms.nearest_monster_distance / SAFE_DIST)
         delta = _clip(float(ms.nearest_monster_distance_delta),
                       -DIST_DELTA_CLIP, DIST_DELTA_CLIP)
-        r += delta * W_DIST_DELTA * (1.0 + danger)
+        monster_dist = delta * W_DIST_DELTA * (1.0 + danger)
+    info["monster_dist"] = round(monster_dist, 6)
 
-    # ---- §4.4  encirclement penalty  -↑🔊 (2+ monsters) ----
+    encircle = 0.0
     if ms.monster_count >= 2 and ms.relative_direction_cosine is not None:
         avg_d = ms.average_monster_distance or 999.0
         avg_mod = max(0.0, 1.0 - avg_d / ENCIRCLE_AVG_SAFE)
-        # cosine < 0 → monsters on opposite sides → hero sandwiched
         threat = max(0.0, -ms.relative_direction_cosine)
-        r -= threat * avg_mod * W_ENCIRCLE
+        encircle = -(threat * avg_mod * W_ENCIRCLE)
+    info["encircle"] = round(encircle, 6)
 
-    # ---- §4.4  traversable space change  ±↑🔊 ----
     sd = _clip(float(ss.traversable_space_delta), -SPACE_DELTA_CLIP, SPACE_DELTA_CLIP)
-    r += sd * W_SPACE_DELTA
+    space = sd * W_SPACE_DELTA
+    info["space"] = round(space, 6)
 
-    # ---- §4.4  dangerous topology  -↑🔉 ----
+    topology = 0.0
     if ss.is_dead_end:
-        r += DEAD_END_PEN
+        topology += DEAD_END_PEN
     if ss.is_corridor:
-        r += CORRIDOR_PEN
+        topology += CORRIDOR_PEN
     if ss.is_low_openness:
-        r += LOW_OPEN_PEN
+        topology += LOW_OPEN_PEN
+    info["topology"] = round(topology, 6)
 
-    # ---- §4.6  no-move penalty  -↑🔉 ----
+    no_move = 0.0
     action_id = al.last_action_id
     if action_id >= 0 and not al.moved:
-        r += NO_MOVE_PEN
+        no_move = NO_MOVE_PEN
+    info["no_move"] = round(no_move, 6)
 
-    # ---- §4.6  flash quality  ----
+    flash_low = 0.0
+    flash_escape = 0.0
     if rd.flash_count_delta > 0:
-        # low-value flash penalty: 闪现位移 < 0.5 × 最长可达位移  -↑🔉
         if action_id >= 8:
             prev_distances: list[float] = data["prev_flash_distance"]
             max_d = max(prev_distances) if prev_distances else 0.0
             flash_dir = action_id - 8
             used_d = prev_distances[flash_dir] if flash_dir < len(prev_distances) else 0.0
             if max_d > 0 and used_d < max_d * LOW_FLASH_RATIO:
-                r += LOW_FLASH_PEN
-
-        # flash escape bonus: 脱险或进入更优位置  +↑🔉
+                flash_low = LOW_FLASH_PEN
         if data["flash_escape_improved_estimate"]:
-            r += FLASH_ESCAPE_BONUS
+            flash_escape = FLASH_ESCAPE_BONUS
+    info["flash_low"] = round(flash_low, 6)
+    info["flash_escape"] = round(flash_escape, 6)
 
-    # ---- §4.6  revisit penalty (visit count)  -↑🔉 ----
+    revisit = 0.0
     vc: int = data["hero_visit_count"]
     if vc > VISIT_THRESH:
-        r -= min((vc - VISIT_THRESH) * W_REVISIT, REVISIT_CAP)
+        revisit = -min((vc - VISIT_THRESH) * W_REVISIT, REVISIT_CAP)
+    info["revisit"] = round(revisit, 6)
 
-    return r
+    r = step_score + monster_dist + encircle + space + topology + no_move + flash_low + flash_escape + revisit
+    return r, info
 
 
-def _explore(rd, rs: ResourceSummary, al: ActionLast) -> float:
+def _explore(rd, rs: ResourceSummary, al: ActionLast) -> tuple[float, dict]:
     """Exploration / resource-aligned shaping (§4.3-treasure, §4.5)."""
-    r = 0.0
+    info: dict[str, float] = {}
 
-    # ---- §4.3  env treasure score  +↓🔉 ----
-    r += rd.treasure_score_delta * W_TREASURE_SCORE
+    treasure_score = rd.treasure_score_delta * W_TREASURE_SCORE
+    info["treasure_score"] = round(treasure_score, 6)
 
-    # ---- §4.5  treasure approach  ±↓🔊 ----
+    treasure_approach = 0.0
     td = rs.nearest_known_treasure_distance_path_delta
     if td is not None:
-        # delta < 0 → getting closer → positive reward
         approach = -_clip(float(td), -TREASURE_APPROACH_CLIP, TREASURE_APPROACH_CLIP)
-        r += approach * W_TREASURE_APPROACH
+        treasure_approach = approach * W_TREASURE_APPROACH
+    info["treasure_approach"] = round(treasure_approach, 6)
 
-    # ---- §4.5  exploration increment  +↓🔊 ----
-    r += al.map_explore_rate_delta * W_EXPLORE
+    map_explore = al.map_explore_rate_delta * W_EXPLORE
+    info["map_explore"] = round(map_explore, 6)
 
-    return r
+    r = treasure_score + treasure_approach + map_explore
+    return r, info
 
 
 def _terminal(terminated: bool, truncated: bool, abnormal_truncated: bool,
