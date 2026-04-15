@@ -34,8 +34,9 @@ class HLGaussLoss(nn.Module):
         )
 
     def transform_to_probs(self, target: torch.Tensor) -> torch.Tensor:
+        target = target.unsqueeze(-1)
         cdf_evals = torch.special.erf(
-            (self.support - target) / (torch.sqrt(torch.tensor(2.0)) * self.sigma)
+            (self.support - target) / (torch.sqrt(torch.tensor(2.0, device=target.device)) * self.sigma)
         )
         z = cdf_evals[..., -1] - cdf_evals[..., 0]
         bin_probs = cdf_evals[..., 1:] - cdf_evals[..., :-1]

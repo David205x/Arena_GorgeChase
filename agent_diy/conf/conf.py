@@ -14,7 +14,7 @@ class Config:
     # Logger报告间隔 (秒)
     LOG_INTERVAL = 15
     # 产出模型间隔 (秒)
-    SAVE_INTERVAL = 900
+    SAVE_INTERVAL = 1200
     # 读取最新模型间隔 (step)
     LOAD_MODEL_INTERVAL = 256
     """****************************** 算法超参 ******************************"""

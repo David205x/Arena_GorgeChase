@@ -391,7 +391,7 @@ class EpisodeStats:
     final_treasures: int = 0
     final_buffs: int = 0
     final_flash_count: int = 0
-    final_nearest_monster_path_distance_estimate: int = 0
+    final_nearest_monster_dist_est: int = 0
     final_capture_margin_path_estimate: int = 0
     final_encirclement_path_cosine_estimate: float = 0.0
     final_safe_direction_path_count_estimate: int = 0
@@ -431,7 +431,7 @@ class EpisodeStats:
             "episode_treasures": float(self.final_treasures),
             "episode_buffs": float(self.final_buffs),
             "episode_flash_count": float(self.final_flash_count),
-            "final_nearest_monster_path_distance_estimate": float(self.final_nearest_monster_path_distance_estimate),
+            "final_nearest_monster_dist_est": float(self.final_nearest_monster_dist_est),
             "final_capture_margin_path_estimate": float(self.final_capture_margin_path_estimate),
             "final_encirclement_path_cosine_estimate": float(self.final_encirclement_path_cosine_estimate),
             "final_safe_direction_path_count_estimate": float(self.final_safe_direction_path_count_estimate),
@@ -440,7 +440,7 @@ class EpisodeStats:
             "last_flash_ready": float(self.last_flash_ready),
             "last_flash_legal_ratio": float(self.last_flash_legal_ratio),
             "last_flash_escape_improved_estimate": float(self.last_flash_escape_improved_estimate),
-            "mean_nearest_monster_path_distance_estimate": self.nearest_monster_path_distance_estimate_sum / signal_steps,
+            "mean_nearest_monster_dist_est": self.nearest_monster_path_distance_estimate_sum / signal_steps,
             "mean_capture_margin_path_estimate": self.capture_margin_path_estimate_sum / signal_steps,
             "mean_encirclement_path_cosine_estimate": self.encirclement_path_cosine_estimate_sum / signal_steps,
             "mean_safe_direction_path_count_estimate": self.safe_direction_path_count_estimate_sum / signal_steps,

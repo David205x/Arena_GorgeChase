@@ -183,26 +183,38 @@ class Agent(BaseAgent):
         value_scalar = float(value.cpu().numpy()[0, 0])
         return probs_np, value_scalar
 
+    @staticmethod
+    def _scalar_item(x):
+        return torch.as_tensor(x).reshape(-1)[0].item()
+
     def _collate(self, list_sample_data):
         """Convert list[SampleData] → batch dict for Algorithm.learn()."""
         obs_flat = torch.stack([
             torch.as_tensor(s.obs, dtype=torch.float32) for s in list_sample_data
         ])
+        action_ids = [int(self._scalar_item(s.act)) for s in list_sample_data]
         batch = {
             "scalar":       obs_flat[:, :_S],
             "local_map":    obs_flat[:, _S:_S + _L].reshape(-1, _LC, _LH, _LW),
             "global_map":   obs_flat[:, _S + _L:].reshape(-1, _GC, _GD, _GD),
             "legal_action": torch.stack([torch.as_tensor(s.legal_action, dtype=torch.float32) for s in list_sample_data]),
-            "old_action":   torch.stack([torch.as_tensor(s.act, dtype=torch.long) for s in list_sample_data]).view(-1, 1),
-            "old_prob":     torch.stack([
-                torch.as_tensor(
-                    [s.prob[int(s.act[0])] if hasattr(s.act, '__getitem__') else s.prob[int(s.act)]],
-                    dtype=torch.float32,
-                ) for s in list_sample_data
+            "old_action":   torch.tensor(action_ids, dtype=torch.long).view(-1, 1),
+            "old_prob":     torch.tensor([
+                [float(torch.as_tensor(s.prob, dtype=torch.float32)[action_id].item())]
+                for s, action_id in zip(list_sample_data, action_ids)
+            ], dtype=torch.float32),
+            "reward":       torch.stack([
+                torch.as_tensor(self._scalar_item(s.reward), dtype=torch.float32)
+                for s in list_sample_data
             ]),
-            "reward":       torch.stack([torch.as_tensor(s.reward, dtype=torch.float32) for s in list_sample_data]).squeeze(-1),
-            "advantage":    torch.stack([torch.as_tensor(s.advantage, dtype=torch.float32) for s in list_sample_data]).squeeze(-1),
-            "td_return":    torch.stack([torch.as_tensor(s.td_return, dtype=torch.float32) for s in list_sample_data]).squeeze(-1),
+            "advantage":    torch.stack([
+                torch.as_tensor(self._scalar_item(s.advantage), dtype=torch.float32)
+                for s in list_sample_data
+            ]),
+            "td_return":    torch.stack([
+                torch.as_tensor(self._scalar_item(s.td_return), dtype=torch.float32)
+                for s in list_sample_data
+            ]),
         }
         return batch
 

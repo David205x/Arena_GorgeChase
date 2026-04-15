@@ -1268,7 +1268,7 @@ class Extractor:
         stats.final_treasures = raw.treasures_collected
         stats.final_buffs = raw.collected_buff
         stats.final_flash_count = raw.flash_count
-        stats.final_nearest_monster_path_distance_estimate = int(global_summary.nearest_monster_path_distance_estimate or 0)
+        stats.final_nearest_monster_dist_est  = int(global_summary.nearest_monster_path_distance_estimate or 0)
         stats.final_capture_margin_path_estimate = int(global_summary.capture_margin_path_estimate or 0)
         stats.final_encirclement_path_cosine_estimate = float(global_summary.encirclement_path_cosine_estimate or 0.0)
         stats.final_safe_direction_path_count_estimate = int(global_summary.safe_direction_path_count_estimate)

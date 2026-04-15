@@ -42,6 +42,10 @@ SampleData = create_cls(
 )
 
 
+def _scalar_item(x) -> float:
+    return float(np.asarray(x).reshape(-1)[0])
+
+
 # ======================== reward_shaping ========================
 def reward_shaping(frame_no, score, terminated, truncated, remain_info, _remain_info, obs, _obs):
     """Framework hook — extracts reward computed in observation_process.
@@ -74,10 +78,10 @@ def _calc_gae(list_sample_data):
     lamda = Config.TDLAMBDA
     gae = 0.0
     for sample in reversed(list_sample_data):
-        done_mask = 1.0 - float(sample.done[0]) if hasattr(sample.done, '__getitem__') else 1.0 - float(sample.done)
-        nv = float(sample.next_value[0]) if hasattr(sample.next_value, '__getitem__') else float(sample.next_value)
-        v = float(sample.value[0]) if hasattr(sample.value, '__getitem__') else float(sample.value)
-        r = float(sample.reward[0]) if hasattr(sample.reward, '__getitem__') else float(sample.reward)
+        done_mask = 1.0 - _scalar_item(sample.done)
+        nv = _scalar_item(sample.next_value)
+        v = _scalar_item(sample.value)
+        r = _scalar_item(sample.reward)
 
         delta = r + gamma * nv * done_mask - v
         gae = delta + gamma * lamda * done_mask * gae
