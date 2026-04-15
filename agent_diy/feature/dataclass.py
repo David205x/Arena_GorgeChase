@@ -1,7 +1,7 @@
 from __future__ import annotations
 import numpy as np
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Self
 
 from .constant import *
 
@@ -38,7 +38,7 @@ class Character:
     """
 
     @classmethod
-    def from_env(cls, obs: dict[str, Any]) -> Character:
+    def from_env(cls, obs: dict[str, Any]) -> Self:
         pos = obs["pos"]
         entity_id = int(obs.get("hero_id", 0) or obs.get("monster_id", 0) or obs.get("config_id", 0))
         return cls(
@@ -88,9 +88,9 @@ class Monster(Character):
             z=base.z,
             hero_l2_distance=base.hero_l2_distance,
             hero_relative_direction=base.hero_relative_direction,
-            monster_interval=int(obs["monster_interval"]),
-            speed=int(obs["speed"]),
-            is_in_view=bool(obs["is_in_view"]),
+            monster_interval=int(obs.get("monster_interval", 0)),
+            speed=int(obs.get("speed", 0)),
+            is_in_view=bool(obs.get("is_in_view", 1)),
         )
 
 
@@ -196,6 +196,52 @@ class RawObs:
 
 
 @dataclass(slots=True)
+class ExtraInfo:
+    map_id: int = -1
+    result_code: int = 0
+    result_message: str = ""
+    hero: Hero | None = None
+    monsters: list[Monster] = field(default_factory=list)
+    treasures: list[Organ] = field(default_factory=list)
+    buffs: list[Organ] = field(default_factory=list)
+
+    @classmethod
+    def from_env(cls, extra_info: dict[str, Any] | None) -> ExtraInfo | None:
+        if not extra_info:
+            return None
+
+        payload = extra_info.get("extra_info", extra_info)
+        frame_state = payload.get("frame_state")
+        if not isinstance(frame_state, dict):
+            return None
+
+        heroes_raw = frame_state.get("heroes")
+        if isinstance(heroes_raw, list):
+            hero_raw = heroes_raw[0] if heroes_raw else None
+        else:
+            hero_raw = heroes_raw
+
+        hero = Hero.from_env(hero_raw) if isinstance(hero_raw, dict) else None
+
+        monsters_raw = frame_state.get("monsters", [])
+        organs_raw = frame_state.get("organs", [])
+
+        monsters = [Monster.from_env(d) for d in monsters_raw if isinstance(d, dict)]
+        treasures = [Organ.from_env(d) for d in organs_raw if isinstance(d, dict) and int(d.get("sub_type", 0)) == 1]
+        buffs = [Organ.from_env(d) for d in organs_raw if isinstance(d, dict) and int(d.get("sub_type", 0)) == 2]
+
+        return cls(
+            map_id=int(payload.get("map_id", -1)),
+            result_code=int(payload.get("result_code", 0)),
+            result_message=str(payload.get("result_message", "")),
+            hero=hero,
+            monsters=monsters,
+            treasures=treasures,
+            buffs=buffs,
+        )
+
+
+@dataclass(slots=True)
 class RewardDelta:
     total_score_delta: float = 0.0
     step_score_delta: float = 0.0
@@ -206,24 +252,26 @@ class RewardDelta:
 
 
 @dataclass(slots=True)
-class ActionResult:
+class ActionPredict:
     move_valid_mask: list[bool] = field(default_factory=lambda: [False] * 8)
     flash_pos: list[tuple[int, int]] = field(default_factory=list)
     flash_pos_relative: list[tuple[int, int]] = field(default_factory=list)
     flash_valid_mask: list[bool] = field(default_factory=lambda: [False] * 8)
     flash_distance: list[float] = field(default_factory=lambda: [0.0] * 8)
+    flash_across_wall: list[bool] = field(default_factory=lambda: [False] * 8)
     action_preferred: list[bool] = field(default_factory=list)
 
 
 @dataclass(slots=True)
-class ActionFeedback:
+class ActionLast:
     moved: bool = False
+    moved_delta: tuple[int, int] = (0, 0)
     moved_effectively: bool = False
     nearest_monster_distance_increased: bool = False
     picked_treasure: bool = False
     picked_buff: bool = False
-    gained_resource: bool = False
     explored_new_area: bool = False
+    map_explore_rate_delta: float = 0.0
     reward_delta: RewardDelta = field(default_factory=RewardDelta)
 
 
@@ -237,14 +285,37 @@ class MonsterSummary:
     nearest_monster_distance_last: int | None = None
     nearest_monster_distance_delta: int | None = None
     average_monster_distance: float | None = None
+    monster1_exists: bool = False
+    monster2_exists: bool = False
+    monster1_steps_to_appear: int = 0
+    monster2_steps_to_appear: int = 0
+    monster1_relative_position: tuple[int, int] = (0, 0)
+    monster2_relative_position: tuple[int, int] = (0, 0)
+    monster1_relative_direction: tuple[int, int] = (0, 0)
+    monster2_relative_direction: tuple[int, int] = (0, 0)
+    monster1_distance_chebyshev: int | None = None
+    monster2_distance_chebyshev: int | None = None
+    monster1_distance_l2: float | None = None
+    monster2_distance_l2: float | None = None
+    monster1_distance_bucket: int | None = None
+    monster2_distance_bucket: int | None = None
+    monster1_speed: int = 0
+    monster2_speed: int = 0
+    monster1_is_nearest: bool = False
+    monster2_is_nearest: bool = False
+    relative_direction_cosine: float | None = None
 
 
 @dataclass(slots=True)
 class ResourceSummary:
     nearest_known_treasure: Organ | None = None
-    nearest_known_treasure_distance: float | None = None
+    nearest_known_treasure_distance_l2: float | None = None
+    nearest_known_treasure_distance_path: int | None = None
+    nearest_known_treasure_direction: tuple[int, int] = (0, 0)
     nearest_known_buff: Organ | None = None
-    nearest_known_buff_distance: float | None = None
+    nearest_known_buff_distance_l2: float | None = None
+    nearest_known_buff_distance_path: int | None = None
+    nearest_known_buff_direction: tuple[int, int] = (0, 0)
     treasure_discovered_count: int = 0
     buff_discovered_count: int = 0
     treasure_progress: float = 0.0
@@ -261,6 +332,117 @@ class SpaceSummary:
     is_dead_end: bool = False
     is_corridor: bool = False
     is_low_openness: bool = False
+
+
+@dataclass(slots=True)
+class GlobalSummary:
+    nearest_monster: Monster | None = None
+    second_monster: Monster | None = None
+    nearest_monster_distance: int | None = None
+    second_monster_distance: int | None = None
+    nearest_monster_distance_last: int | None = None
+    nearest_monster_distance_delta: int | None = None
+    average_monster_distance: float | None = None
+    safe_direction_count: int = 0
+    safe_direction_count_last: int = 0
+    safe_direction_count_delta: int = 0
+    nearest_monster_path_distance_estimate: int | None = None
+    second_monster_path_distance_estimate: int | None = None
+    nearest_monster_path_distance_last_estimate: int | None = None
+    nearest_monster_path_distance_delta_estimate: int | None = None
+    average_monster_path_distance_estimate: float | None = None
+    capture_margin_path_estimate: int | None = None
+    capture_margin_path_last_estimate: int | None = None
+    capture_margin_path_delta_estimate: int | None = None
+    nearest_monster_approach_direction_estimate: tuple[int, int] = (0, 0)
+    second_monster_approach_direction_estimate: tuple[int, int] = (0, 0)
+    encirclement_path_cosine_estimate: float | None = None
+    encirclement_path_cosine_last_estimate: float | None = None
+    encirclement_path_cosine_delta_estimate: float | None = None
+    safe_direction_path_count_estimate: int = 0
+    safe_direction_path_count_last_estimate: int = 0
+    safe_direction_path_count_delta_estimate: int = 0
+    dead_end_under_pressure_estimate: bool = False
+
+
+@dataclass(slots=True)
+class EpisodeStats:
+    map_id: int = -1
+    result_code: int = 0
+    episode_steps: int = 0
+    stage1_steps: int = 0
+    stage2_steps: int = 0
+    stage3_steps: int = 0
+    pre_steps: int = 0
+    post_steps: int = 0
+    speedup_reached: bool = False
+    terminated: bool = False
+    truncated: bool = False
+    completed: bool = False
+    abnormal_truncated: bool = False
+    post_terminated: bool = False
+    final_stage: int = 0
+    final_total_score: float = 0.0
+    final_step_score: float = 0.0
+    final_treasure_score: float = 0.0
+    final_treasures: int = 0
+    final_buffs: int = 0
+    final_flash_count: int = 0
+    final_nearest_monster_path_distance_estimate: int = 0
+    final_capture_margin_path_estimate: int = 0
+    final_encirclement_path_cosine_estimate: float = 0.0
+    final_safe_direction_path_count_estimate: int = 0
+    final_visible_treasure_ratio: float = 0.0
+    last_flash_used: bool = False
+    last_flash_ready: bool = False
+    last_flash_legal_ratio: float = 0.0
+    last_flash_escape_improved_estimate: bool = False
+    path_signal_steps: int = 0
+    nearest_monster_path_distance_estimate_sum: float = 0.0
+    capture_margin_path_estimate_sum: float = 0.0
+    encirclement_path_cosine_estimate_sum: float = 0.0
+    safe_direction_path_count_estimate_sum: float = 0.0
+    flash_escape_success_count: int = 0
+
+    def as_dict(self) -> dict[str, float]:
+        signal_steps = max(self.path_signal_steps, 1)
+        return {
+            "map_id": float(self.map_id),
+            "result_code": float(self.result_code),
+            "episode_steps": float(self.episode_steps),
+            "stage1_steps": float(self.stage1_steps),
+            "stage2_steps": float(self.stage2_steps),
+            "stage3_steps": float(self.stage3_steps),
+            "pre_steps": float(self.pre_steps),
+            "post_steps": float(self.post_steps),
+            "speedup_reached": float(self.speedup_reached),
+            "terminated": float(self.terminated),
+            "truncated": float(self.truncated),
+            "completed": float(self.completed),
+            "abnormal_truncated": float(self.abnormal_truncated),
+            "post_terminated": float(self.post_terminated),
+            "final_stage": float(self.final_stage),
+            "episode_total_score": float(self.final_total_score),
+            "episode_step_score": float(self.final_step_score),
+            "episode_treasure_score": float(self.final_treasure_score),
+            "episode_treasures": float(self.final_treasures),
+            "episode_buffs": float(self.final_buffs),
+            "episode_flash_count": float(self.final_flash_count),
+            "final_nearest_monster_path_distance_estimate": float(self.final_nearest_monster_path_distance_estimate),
+            "final_capture_margin_path_estimate": float(self.final_capture_margin_path_estimate),
+            "final_encirclement_path_cosine_estimate": float(self.final_encirclement_path_cosine_estimate),
+            "final_safe_direction_path_count_estimate": float(self.final_safe_direction_path_count_estimate),
+            "final_visible_treasure_ratio": float(self.final_visible_treasure_ratio),
+            "last_flash_used": float(self.last_flash_used),
+            "last_flash_ready": float(self.last_flash_ready),
+            "last_flash_legal_ratio": float(self.last_flash_legal_ratio),
+            "last_flash_escape_improved_estimate": float(self.last_flash_escape_improved_estimate),
+            "mean_nearest_monster_path_distance_estimate": self.nearest_monster_path_distance_estimate_sum / signal_steps,
+            "mean_capture_margin_path_estimate": self.capture_margin_path_estimate_sum / signal_steps,
+            "mean_encirclement_path_cosine_estimate": self.encirclement_path_cosine_estimate_sum / signal_steps,
+            "mean_safe_direction_path_count_estimate": self.safe_direction_path_count_estimate_sum / signal_steps,
+            "flash_escape_success_count": float(self.flash_escape_success_count),
+        }
 
 
 @dataclass(slots=True)
@@ -281,6 +463,8 @@ class LocalMapLayers:
     treasure: np.ndarray = field(default_factory=lambda: np.zeros((VIEW_SIZE, VIEW_SIZE), dtype=np.int8))
     buff: np.ndarray = field(default_factory=lambda: np.zeros((VIEW_SIZE, VIEW_SIZE), dtype=np.int8))
     visit: np.ndarray = field(default_factory=lambda: np.zeros((VIEW_SIZE, VIEW_SIZE), dtype=np.float32))
+    visit_coverage: np.ndarray = field(default_factory=lambda: np.zeros((VIEW_SIZE, VIEW_SIZE), dtype=np.float32))
+    flash_landing: np.ndarray = field(default_factory=lambda: np.zeros((VIEW_SIZE, VIEW_SIZE), dtype=np.int8))
 
     def as_stack(self) -> np.ndarray:
         return np.stack([
@@ -290,19 +474,22 @@ class LocalMapLayers:
             self.treasure,
             self.buff,
             self.visit,
+            self.flash_landing,
         ], axis=0,)
 
 
 @dataclass(slots=True)
 class ExtractorSnapshot:
     raw: RawObs | None = None
+    extra: ExtraInfo | None = None
     hero_speed: int = 1
     map_explore_rate: float = 0.0
     map_new_discover: int = 0
-    action_result: ActionResult = field(default_factory=ActionResult)
-    action_feedback: ActionFeedback = field(default_factory=ActionFeedback)
+    action_predict: ActionPredict = field(default_factory=ActionPredict)
+    action_last: ActionLast = field(default_factory=ActionLast)
     monster_summary: MonsterSummary = field(default_factory=MonsterSummary)
     resource_summary: ResourceSummary = field(default_factory=ResourceSummary)
     space_summary: SpaceSummary = field(default_factory=SpaceSummary)
+    global_summary: GlobalSummary = field(default_factory=GlobalSummary)
     stage_info: StageInfo = field(default_factory=StageInfo)
     local_map_layers: LocalMapLayers = field(default_factory=LocalMapLayers)

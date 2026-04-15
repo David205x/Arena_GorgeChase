@@ -6,7 +6,7 @@ SERVER_PORT = 18081
 # ========== web front
 TEMPLATE_PATH = Path(__file__).resolve().with_name('web_console.html')
 # ========== map
-MAP_DIR = Path(__file__).resolve().parents[1] / 'ref'
+MAP_DIR = Path(__file__).resolve().parents[1] / 'ref' / 'map'
 MAP_CACHE = {}
 
 # ========== web action display
