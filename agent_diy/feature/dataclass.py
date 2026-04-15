@@ -1,7 +1,7 @@
 from __future__ import annotations
 import numpy as np
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Self
 
 from .constant import *
 
@@ -38,7 +38,7 @@ class Character:
     """
 
     @classmethod
-    def from_env(cls, obs: dict[str, Any]) -> Character:
+    def from_env(cls, obs: dict[str, Any]) -> Self:
         pos = obs["pos"]
         entity_id = int(obs.get("hero_id", 0) or obs.get("monster_id", 0) or obs.get("config_id", 0))
         return cls(

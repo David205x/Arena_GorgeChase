@@ -610,6 +610,7 @@
                         </div>
                     </details>
                     <details class="fold span-3" data-fold-key="page-reward.tree">
+
                         <summary>Reward 全量字段</summary>
                         <div class="fold-body">
                             <div id="reward-tree" class="tree"></div>
@@ -658,7 +659,7 @@
         </aside>
     </div>
     <script>
-    const ACTION_GROUPS = __ACTION_GROUPS__; 
+        const ACTION_GROUPS = __ACTION_GROUPS__;
         const KEYPAD_TO_ACTION = { "1": 5, "2": 6, "3": 7, "4": 4, "6": 0, "7": 3, "8": 2, "9": 1 };
         const TABS = [
             { id: "env", label: "环境总览" },
@@ -700,7 +701,7 @@
             });
         }
 
-    function buildActionPanel() { 
+        function buildActionPanel() {
             const shell = $("action-shell");
             shell.innerHTML = "";
             ACTION_GROUPS.forEach((group) => {

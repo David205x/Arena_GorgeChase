@@ -86,15 +86,22 @@ class Extractor:
         self.previous: ExtractorSnapshot = ExtractorSnapshot()
         self.current_extra: ExtraInfo | None = None
         self.previous_extra: ExtraInfo | None = None
+        self.current_extra: ExtraInfo | None = None
+        self.previous_extra: ExtraInfo | None = None
         # ========== map cache
         self.map_id: int = -1
         self.map_full: np.ndarray = np.full((MAP_SIZE, MAP_SIZE), -1, dtype=np.int8)
         """-1=未探索, 0=已探索不可通行, 1=已探索可通行"""
         self.map_static: np.ndarray | None = None
         self.map_static_id: int = -1
+        self.map_static: np.ndarray | None = None
+        self.map_static_id: int = -1
         self.visit_count: np.ndarray = np.zeros((MAP_SIZE, MAP_SIZE), dtype=np.int32)
         self.visit_coverage: np.ndarray = np.zeros((MAP_SIZE, MAP_SIZE), dtype=np.float32)
+        self.visit_coverage: np.ndarray = np.zeros((MAP_SIZE, MAP_SIZE), dtype=np.float32)
         # ========== resource cache
+        self.treasure_full: dict[int, Organ | None] = {}
+        """key 为从 1 开始的连续 treasure config_id。"""
         self.treasure_full: dict[int, Organ | None] = {}
         """key 为从 1 开始的连续 treasure config_id。"""
         self.buff_full: dict[int, Organ | None] = {}
@@ -115,11 +122,17 @@ class Extractor:
         self.previous = ExtractorSnapshot()
         self.current_extra = None
         self.previous_extra = None
+        self.current_extra = None
+        self.previous_extra = None
         self.map_id = -1
         self.map_full = np.full((MAP_SIZE, MAP_SIZE), -1, dtype=np.int8)
         self.map_static = None
         self.map_static_id = -1
+        self.map_static = None
+        self.map_static_id = -1
         self.visit_count = np.zeros((MAP_SIZE, MAP_SIZE), dtype=np.int32)
+        self.visit_coverage = np.zeros((MAP_SIZE, MAP_SIZE), dtype=np.float32)
+        self.treasure_full = {}
         self.visit_coverage = np.zeros((MAP_SIZE, MAP_SIZE), dtype=np.float32)
         self.treasure_full = {}
         self.buff_full = {}
@@ -159,6 +172,7 @@ class Extractor:
         self.init_resource_cache(raw)
         self.update_map_full(raw)
         self.update_visit_count(raw)
+        self.update_visit_coverage(raw)
         self.update_visit_coverage(raw)
         self.update_pos_history()
         self.update_treasure_cache(raw)
@@ -204,6 +218,7 @@ class Extractor:
     def init_resource_cache(self, raw: RawObs) -> None:
         """按当前环境配置初始化资源缓存容器"""
         if not self.treasure_full:
+            self.treasure_full = {i: None for i in range(1, raw.total_treasure + 1)}
             self.treasure_full = {i: None for i in range(1, raw.total_treasure + 1)}
         if not self.buff_full:
             self.buff_full = {i: None for i in range(raw.total_treasure, raw.total_treasure + raw.total_buff)}
@@ -256,6 +271,26 @@ class Extractor:
                 if raw.map_view[local_z, local_x] == 1:
                     self.visit_coverage[global_z, global_x] += 0.5
 
+    def update_visit_coverage(self, raw: RawObs) -> None:
+        """更新带邻域覆盖的访问热度"""
+        hero_x, hero_z = raw.hero.x, raw.hero.z
+        self.visit_coverage[hero_z, hero_x] += 1.0
+
+        for dz in (-1, 0, 1):
+            for dx in (-1, 0, 1):
+                if dx == 0 and dz == 0:
+                    continue
+
+                global_x = hero_x + dx
+                global_z = hero_z + dz
+                if global_x < 0 or global_x >= MAP_SIZE or global_z < 0 or global_z >= MAP_SIZE:
+                    continue
+
+                local_x = VIEW_CENTER + dx
+                local_z = VIEW_CENTER + dz
+                if raw.map_view[local_z, local_x] == 1:
+                    self.visit_coverage[global_z, global_x] += 0.5
+
     def update_pos_history(self) -> None:
         if self.previous.raw is None:
             return
@@ -267,6 +302,7 @@ class Extractor:
         for treasure in raw.treasures:
             self.treasure_full[treasure.id] = treasure
 
+        for treasure in self.treasure_full.values():
         for treasure in self.treasure_full.values():
             if treasure is None:
                 continue
@@ -284,6 +320,31 @@ class Extractor:
             if is_pos_neighbor(raw.hero.x, raw.hero.z, buff.x, buff.z) and raw.hero.buff_remaining_time == 49:
                 buff.cooldown = raw.buff_refresh_time
             buff.cooldown = max(buff.cooldown - 1, 0)
+
+    def ensure_static_map_loaded(self, map_id: int) -> None:
+        """
+        加载地图真值通行图，仅供 reward / monitor 侧做路径估计。
+        """
+        if self.map_static is not None and self.map_static_id == map_id:
+            return
+
+        map_path = Path(__file__).resolve().parents[1] / "ref" / "map" / f"gorge_chase_map_{map_id}.json"
+        if not map_path.exists():
+            self.map_static = None
+            self.map_static_id = -1
+            return
+
+        with map_path.open("r", encoding="utf-8") as f:
+            data = json.load(f)
+
+        matrix = np.zeros((MAP_SIZE, MAP_SIZE), dtype=np.int8)
+        for cell in data.get("cells", []):
+            x = int(cell.get("x", -1))
+            z = int(cell.get("z", -1))
+            if 0 <= x < MAP_SIZE and 0 <= z < MAP_SIZE and int(cell.get("type_id", 0)) == 1:
+                matrix[z, x] = 1
+        self.map_static = matrix
+        self.map_static_id = map_id
 
     def ensure_static_map_loaded(self, map_id: int) -> None:
         """
@@ -355,6 +416,7 @@ class Extractor:
         )
 
     def compute_action_last(self) -> ActionLast:
+    def compute_action_last(self) -> ActionLast:
         """
         计算上一动作在当前帧体现出的结果反馈。
         """
@@ -364,8 +426,10 @@ class Extractor:
 
         if current is None or previous is None:
             return ActionLast(reward_delta=reward_delta)
+            return ActionLast(reward_delta=reward_delta)
 
         moved = (current.hero.x != previous.hero.x) or (current.hero.z != previous.hero.z)
+        moved_delta = (current.hero.x - previous.hero.x, current.hero.z - previous.hero.z)
         moved_delta = (current.hero.x - previous.hero.x, current.hero.z - previous.hero.z)
 
         nearest_current = self.current.monster_summary.nearest_monster_distance
@@ -377,6 +441,7 @@ class Extractor:
         picked_treasure = reward_delta.treasures_collected_delta > 0
         picked_buff = reward_delta.collected_buff_delta > 0
         map_explore_rate_delta = self.current.map_explore_rate - self.previous.map_explore_rate
+        map_explore_rate_delta = self.current.map_explore_rate - self.previous.map_explore_rate
 
         return ActionLast(
             last_action_id=self._last_action,
@@ -387,20 +452,25 @@ class Extractor:
             picked_buff=picked_buff,
             explored_new_area=self.current.map_new_discover > 0,
             map_explore_rate_delta=map_explore_rate_delta,
+            map_explore_rate_delta=map_explore_rate_delta,
             reward_delta=reward_delta,
         )
 
+    def compute_action_predict(self) -> ActionPredict:
+        """计算当前帧面向下一步决策的动作预测摘要。"""
     def compute_action_predict(self) -> ActionPredict:
         """计算当前帧面向下一步决策的动作预测摘要。"""
         move_valid_mask = self.get_move_valid_mask()
         flash_result = self.get_flash_result()
 
         return ActionPredict(
+        return ActionPredict(
             move_valid_mask=move_valid_mask,
             flash_pos=flash_result.flash_pos,
             flash_pos_relative=flash_result.flash_pos_relative,
             flash_valid_mask=flash_result.flash_valid_mask,
             flash_distance=flash_result.flash_distance,
+            flash_across_wall=flash_result.flash_across_wall,
             flash_across_wall=flash_result.flash_across_wall,
             action_preferred=move_valid_mask + flash_result.flash_valid_mask, #TODO
         )
@@ -418,11 +488,25 @@ class Extractor:
         nearest_monster = visible_monsters[0] if len(visible_monsters) >= 1 else None
         second_monster = visible_monsters[1] if len(visible_monsters) >= 2 else None
 
+        raw = self.current.raw
+        if raw is None:
+            return MonsterSummary()
+
+        hero = raw.hero
+        visible_monsters = sorted(
+            raw.monsters,
+            key=lambda m: chebyshev_distance(hero.x, hero.z, m.x, m.z),
+        )
+        nearest_monster = visible_monsters[0] if len(visible_monsters) >= 1 else None
+        second_monster = visible_monsters[1] if len(visible_monsters) >= 2 else None
+
         nearest_distance = None
         second_distance = None
         average_distance = None
         if nearest_monster is not None:
+        if nearest_monster is not None:
             nearest_distance = chebyshev_distance(hero.x, hero.z, nearest_monster.x, nearest_monster.z)
+        if second_monster is not None:
         if second_monster is not None:
             second_distance = chebyshev_distance(hero.x, hero.z, second_monster.x, second_monster.z)
 
@@ -483,6 +567,53 @@ class Extractor:
         monster2_is_nearest = nearest_monster is not None and monster2 is not None and nearest_monster.id == monster2.id
         relative_direction_cosine = cosine_from_vectors(monster1_relative_direction, monster2_relative_direction)
 
+        monster_count = len(raw.monsters)
+        monster1 = raw.monsters[0] if len(raw.monsters) >= 1 else None
+        monster2 = raw.monsters[1] if len(raw.monsters) >= 2 else None
+
+        def relative_position(monster: Monster | None) -> tuple[int, int]:
+            if monster is None:
+                return (0, 0)
+            return (monster.x - hero.x, monster.z - hero.z)
+
+        def l2_distance(monster: Monster | None) -> float | None:
+            if monster is None:
+                return None
+            return distance_l2(hero.x, hero.z, monster.x, monster.z)
+
+        def bucket_distance(monster: Monster | None) -> int | None:
+            if monster is None:
+                return None
+            return int(monster.hero_l2_distance)
+
+        def cosine_from_vectors(v1: tuple[int, int], v2: tuple[int, int]) -> float | None:
+            a = np.asarray(v1, dtype=np.float32)
+            b = np.asarray(v2, dtype=np.float32)
+            norm = float(np.linalg.norm(a) * np.linalg.norm(b))
+            if norm <= 1e-6:
+                return None
+            return float(np.clip(np.dot(a, b) / norm, -1.0, 1.0))
+
+        monster1_exists = monster1 is not None
+        monster2_exists = monster2 is not None
+        monster1_steps_to_appear = 0
+        monster2_steps_to_appear = 0 if monster2_exists else max(0, raw.monster_interval - raw.step) if raw.monster_interval >= 0 else 0
+        monster1_relative_position = relative_position(monster1)
+        monster2_relative_position = relative_position(monster2)
+        monster1_relative_direction = monster1.hero_relative_direction if monster1 is not None else (0, 0)
+        monster2_relative_direction = monster2.hero_relative_direction if monster2 is not None else (0, 0)
+        monster1_distance_chebyshev = chebyshev_distance(hero.x, hero.z, monster1.x, monster1.z) if monster1 is not None else None
+        monster2_distance_chebyshev = chebyshev_distance(hero.x, hero.z, monster2.x, monster2.z) if monster2 is not None else None
+        monster1_distance_l2 = l2_distance(monster1)
+        monster2_distance_l2 = l2_distance(monster2)
+        monster1_distance_bucket = bucket_distance(monster1)
+        monster2_distance_bucket = bucket_distance(monster2)
+        monster1_speed = monster1.speed if monster1 is not None else 0
+        monster2_speed = monster2.speed if monster2 is not None else 0
+        monster1_is_nearest = nearest_monster is not None and monster1 is not None and nearest_monster.id == monster1.id
+        monster2_is_nearest = nearest_monster is not None and monster2 is not None and nearest_monster.id == monster2.id
+        relative_direction_cosine = cosine_from_vectors(monster1_relative_direction, monster2_relative_direction)
+
         return MonsterSummary(
             monster_count=monster_count,
             nearest_monster=nearest_monster,
@@ -492,6 +623,25 @@ class Extractor:
             nearest_monster_distance_last=nearest_distance_last,
             nearest_monster_distance_delta=nearest_distance_delta,
             average_monster_distance=average_distance,
+            monster1_exists=monster1_exists,
+            monster2_exists=monster2_exists,
+            monster1_steps_to_appear=monster1_steps_to_appear,
+            monster2_steps_to_appear=monster2_steps_to_appear,
+            monster1_relative_position=monster1_relative_position,
+            monster2_relative_position=monster2_relative_position,
+            monster1_relative_direction=monster1_relative_direction,
+            monster2_relative_direction=monster2_relative_direction,
+            monster1_distance_chebyshev=monster1_distance_chebyshev,
+            monster2_distance_chebyshev=monster2_distance_chebyshev,
+            monster1_distance_l2=monster1_distance_l2,
+            monster2_distance_l2=monster2_distance_l2,
+            monster1_distance_bucket=monster1_distance_bucket,
+            monster2_distance_bucket=monster2_distance_bucket,
+            monster1_speed=monster1_speed,
+            monster2_speed=monster2_speed,
+            monster1_is_nearest=monster1_is_nearest,
+            monster2_is_nearest=monster2_is_nearest,
+            relative_direction_cosine=relative_direction_cosine,
             monster1_exists=monster1_exists,
             monster2_exists=monster2_exists,
             monster1_steps_to_appear=monster1_steps_to_appear,
@@ -603,6 +753,9 @@ class Extractor:
 
         return ResourceSummary(
             nearest_known_treasure=nearest_treasure,
+            nearest_known_treasure_distance_l2=nearest_treasure_distance_l2,
+            nearest_known_treasure_distance_path=nearest_treasure_distance_path,
+            nearest_known_treasure_direction=nearest_treasure_direction,
             nearest_known_treasure_distance_l2=nearest_treasure_distance_l2,
             nearest_known_treasure_distance_path=nearest_treasure_distance_path,
             nearest_known_treasure_direction=nearest_treasure_direction,
@@ -1356,6 +1509,24 @@ class Extractor:
                 best_l2_distance = l2_distance
         return best_treasure
 
+        best_treasure: Organ | None = None
+        best_path_distance: int | None = None
+        best_l2_distance: float | None = None
+        for treasure in treasures:
+            path_distance = self.estimate_path_distance_on_known_map(hero.x, hero.z, treasure.x, treasure.z)
+            l2_distance = distance_l2(hero.x, hero.z, treasure.x, treasure.z)
+            if path_distance is not None:
+                if best_path_distance is None or path_distance < best_path_distance or (
+                    path_distance == best_path_distance and (best_l2_distance is None or l2_distance < best_l2_distance)
+                ):
+                    best_treasure = treasure
+                    best_path_distance = path_distance
+                    best_l2_distance = l2_distance
+            elif best_path_distance is None and (best_l2_distance is None or l2_distance < best_l2_distance):
+                best_treasure = treasure
+                best_l2_distance = l2_distance
+        return best_treasure
+
     def get_nearest_known_buff(self) -> Organ | None:
         raw = self.current.raw
         if raw is None:
@@ -1383,7 +1554,26 @@ class Extractor:
                 best_l2_distance = l2_distance
         return best_buff
 
+        best_buff: Organ | None = None
+        best_path_distance: int | None = None
+        best_l2_distance: float | None = None
+        for buff in buffs:
+            path_distance = self.estimate_path_distance_on_known_map(hero.x, hero.z, buff.x, buff.z)
+            l2_distance = distance_l2(hero.x, hero.z, buff.x, buff.z)
+            if path_distance is not None:
+                if best_path_distance is None or path_distance < best_path_distance or (
+                    path_distance == best_path_distance and (best_l2_distance is None or l2_distance < best_l2_distance)
+                ):
+                    best_buff = buff
+                    best_path_distance = path_distance
+                    best_l2_distance = l2_distance
+            elif best_path_distance is None and (best_l2_distance is None or l2_distance < best_l2_distance):
+                best_buff = buff
+                best_l2_distance = l2_distance
+        return best_buff
+
     def get_known_treasures(self, only_available: bool = True) -> list[Organ]:
+        treasures = [t for t in self.treasure_full.values() if t is not None]
         treasures = [t for t in self.treasure_full.values() if t is not None]
         if only_available:
             treasures = [t for t in treasures if t.status == 1]
@@ -1394,6 +1584,23 @@ class Extractor:
         if only_available:
             buffs = [b for b in buffs if b.status == 1 and b.cooldown == 0]
         return buffs
+
+    def build_global_treasure_available_map(self) -> np.ndarray:
+        layer = np.zeros((MAP_SIZE, MAP_SIZE), dtype=np.int8)
+        for treasure in self.get_known_treasures(only_available=True):
+            if 0 <= treasure.x < MAP_SIZE and 0 <= treasure.z < MAP_SIZE:
+                layer[treasure.z, treasure.x] = 1
+        return layer
+
+    def build_global_buff_known_map(self) -> np.ndarray:
+        layer = np.zeros((MAP_SIZE, MAP_SIZE), dtype=np.float32)
+        raw = self.current.raw
+        cooldown_max = max(int(raw.buff_refresh_time), 1) if raw is not None else 1
+        for buff in self.get_known_buffs(only_available=False):
+            if 0 <= buff.x < MAP_SIZE and 0 <= buff.z < MAP_SIZE:
+                cooldown_ratio = float(np.clip(buff.cooldown / cooldown_max, 0.0, 1.0))
+                layer[buff.z, buff.x] = max(0.1, cooldown_ratio)
+        return layer
 
     def build_global_treasure_available_map(self) -> np.ndarray:
         layer = np.zeros((MAP_SIZE, MAP_SIZE), dtype=np.int8)
@@ -1439,16 +1646,19 @@ class Extractor:
         return mask
 
     def get_flash_result(self) -> ActionPredict:
+    def get_flash_result(self) -> ActionPredict:
         """
         返回当前帧与闪现动作相关的结果集合。
         """
         raw = self.current.raw
         if raw is None:
             return ActionPredict(
+            return ActionPredict(
                 flash_pos=[(0, 0)] * 8,
                 flash_pos_relative=[(0, 0)] * 8,
                 flash_valid_mask=[False] * 8,
                 flash_distance=[0.0] * 8,
+                flash_across_wall=[False] * 8,
                 flash_across_wall=[False] * 8,
             )
 
@@ -1476,10 +1686,30 @@ class Extractor:
             flash_across_wall.append(crossed_wall)
 
         return ActionPredict(
+        flash_across_wall: list[bool] = []
+
+        for (dx, dz), distance in zip(relative, flash_distance):
+            if distance <= 1.0 or (dx == 0 and dz == 0):
+                flash_across_wall.append(False)
+                continue
+
+            step_dx = int(np.sign(dx))
+            step_dz = int(np.sign(dz))
+            crossed_wall = False
+            for step in range(1, int(distance) + 1):
+                nx = VIEW_CENTER + step_dx * step
+                nz = VIEW_CENTER + step_dz * step
+                if raw.map_view[nz, nx] == 0:
+                    crossed_wall = True
+                    break
+            flash_across_wall.append(crossed_wall)
+
+        return ActionPredict(
             flash_pos=global_flash_pos,
             flash_pos_relative=relative,
             flash_valid_mask=valid,
             flash_distance=flash_distance,
+            flash_across_wall=flash_across_wall,
             flash_across_wall=flash_across_wall,
         )
 
@@ -1499,6 +1729,7 @@ class Extractor:
         raw = self.current.raw
         return {
             "raw": raw,
+            'raw_previous': self.previous.raw,
             "hero": raw.hero if raw is not None else None,
             "hero_speed": self.current.hero_speed,
             "legal_action": raw.legal_action if raw is not None else None,
@@ -1541,6 +1772,7 @@ class Extractor:
             # ===== lifecycle
             "raw": raw,
             "extra": self.current_extra,
+            "extra": self.current_extra,
             "terminated": self.terminated,
             "truncated": self.truncated,
             "abnormal_truncated": self.is_abnormal_truncated(),
@@ -1581,6 +1813,8 @@ class Extractor:
             "previous": self.previous,
             "current_extra": self.current_extra,
             "previous_extra": self.previous_extra,
+            "current_extra": self.current_extra,
+            "previous_extra": self.previous_extra,
             "current_raw": self.current.raw,
             "previous_raw": self.previous.raw,
 
@@ -1588,6 +1822,9 @@ class Extractor:
             "map_id": self.map_id,
             "map_full": self.map_full,
             "visit_count": self.visit_count,
+            "visit_coverage": self.visit_coverage,
+            "treasure_available_map": self.build_global_treasure_available_map(),
+            "buff_known_map": self.build_global_buff_known_map(),
             "visit_coverage": self.visit_coverage,
             "treasure_available_map": self.build_global_treasure_available_map(),
             "buff_known_map": self.build_global_buff_known_map(),
@@ -1606,7 +1843,12 @@ class Extractor:
             "action_predict": self.current.action_predict,
             "action_last": self.current.action_last,
             "global_summary": self.current.global_summary,
+            "action_predict": self.current.action_predict,
+            "action_last": self.current.action_last,
+            "global_summary": self.current.global_summary,
             "local_map_layers": self.current.local_map_layers,
+            "episode_stats": self.episode_stats,
+            "monitor_metrics": self.build_monitor_metrics(),
             "episode_stats": self.episode_stats,
             "monitor_metrics": self.build_monitor_metrics(),
 
