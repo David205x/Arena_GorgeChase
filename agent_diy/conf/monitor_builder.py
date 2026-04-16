@@ -73,13 +73,13 @@ def build_monitor():
     m.add_panel(name="survival", name_en="reward_survival", type="line")
     m.add_metric(metrics_name="reward_survival", expr="avg(reward_survival{})")
     m.end_panel()
-    m.add_panel(name="survival_weighted", name_en="reward_survival_weighted", type="line")
+    m.add_panel(name="survival_w", name_en="reward_survival_w", type="line")
     m.add_metric(metrics_name="reward_survival_weighted", expr="avg(reward_survival_weighted{})")
     m.end_panel()
     m.add_panel(name="explore", name_en="reward_explore", type="line")
     m.add_metric(metrics_name="reward_explore", expr="avg(reward_explore{})")
     m.end_panel()
-    m.add_panel(name="explore_weighted", name_en="reward_explore_weighted", type="line")
+    m.add_panel(name="explore_w", name_en="reward_explore_w", type="line")
     m.add_metric(metrics_name="reward_explore_weighted", expr="avg(reward_explore_weighted{})")
     m.end_panel()
     m.add_panel(name="terminal", name_en="reward_terminal", type="line")
@@ -124,10 +124,10 @@ def build_monitor():
     # Group 4: 探索奖励子项
     # ================================================================
     m.add_group(group_name="探索奖励子项", group_name_en="explore_components")
-    m.add_panel(name="e_treasure_score", name_en="e_treasure_score", type="line")
+    m.add_panel(name="e_t_score", name_en="e_t_score", type="line")
     m.add_metric(metrics_name="e_treasure_score", expr="avg(e_treasure_score{})")
     m.end_panel()
-    m.add_panel(name="e_treasure_approach", name_en="e_treasure_approach", type="line")
+    m.add_panel(name="e_t_approach", name_en="e_t_approach", type="line")
     m.add_metric(metrics_name="e_treasure_approach", expr="avg(e_treasure_approach{})")
     m.end_panel()
     m.add_panel(name="e_map_explore", name_en="e_map_explore", type="line")
@@ -142,7 +142,7 @@ def build_monitor():
     m.add_panel(name="t_complete_bonus", name_en="t_complete_bonus", type="line")
     m.add_metric(metrics_name="t_complete_bonus", expr="avg(t_complete_bonus{})")
     m.end_panel()
-    m.add_panel(name="t_death_stage_pen", name_en="t_death_stage_pen", type="line")
+    m.add_panel(name="t_stage_pen", name_en="t_stage_pen", type="line")
     m.add_metric(metrics_name="t_death_stage_pen", expr="avg(t_death_stage_pen{})")
     m.end_panel()
     m.add_panel(name="t_encircle_pen", name_en="t_encircle_pen", type="line")
@@ -151,7 +151,7 @@ def build_monitor():
     m.add_panel(name="t_dead_end_pen", name_en="t_dead_end_pen", type="line")
     m.add_metric(metrics_name="t_dead_end_pen", expr="avg(t_dead_end_pen{})")
     m.end_panel()
-    m.add_panel(name="t_same_side_reduce", name_en="t_same_side_reduce", type="line")
+    m.add_panel(name="t_side_reduce", name_en="t_side_reduce", type="line")
     m.add_metric(metrics_name="t_same_side_reduce", expr="avg(t_same_side_reduce{})")
     m.end_panel()
     m.end_group()
@@ -169,7 +169,7 @@ def build_monitor():
     m.add_panel(name="episode_step_score", name_en="episode_step_score", type="line")
     m.add_metric(metrics_name="episode_step_score", expr="avg(episode_step_score{})")
     m.end_panel()
-    m.add_panel(name="episode_treasure_score", name_en="episode_treasure_score", type="line")
+    m.add_panel(name="ep_t_score", name_en="ep_t_score", type="line")
     m.add_metric(metrics_name="episode_treasure_score", expr="avg(episode_treasure_score{})")
     m.end_panel()
     m.add_panel(name="episode_treasures", name_en="episode_treasures", type="line")
@@ -178,10 +178,10 @@ def build_monitor():
     m.add_panel(name="episode_buffs", name_en="episode_buffs", type="line")
     m.add_metric(metrics_name="episode_buffs", expr="avg(episode_buffs{})")
     m.end_panel()
-    m.add_panel(name="episode_flash_count", name_en="episode_flash_count", type="line")
+    m.add_panel(name="ep_flash_cnt", name_en="ep_flash_cnt", type="line")
     m.add_metric(metrics_name="episode_flash_count", expr="avg(episode_flash_count{})")
     m.end_panel()
-    m.add_panel(name="speedup_reached", name_en="speedup_reached", type="line")
+    m.add_panel(name="speedup_ok", name_en="speedup_ok", type="line")
     m.add_metric(metrics_name="speedup_reached", expr="avg(speedup_reached{})")
     m.end_panel()
     m.add_panel(name="terminated", name_en="terminated", type="line")
@@ -190,10 +190,10 @@ def build_monitor():
     m.add_panel(name="completed", name_en="completed", type="line")
     m.add_metric(metrics_name="completed", expr="avg(completed{})")
     m.end_panel()
-    m.add_panel(name="abnormal_truncated", name_en="abnormal_truncated", type="line")
+    m.add_panel(name="abnormal_trunc", name_en="abnormal_trunc", type="line")
     m.add_metric(metrics_name="abnormal_truncated", expr="avg(abnormal_truncated{})")
     m.end_panel()
-    m.add_panel(name="post_terminated", name_en="post_terminated", type="line")
+    m.add_panel(name="post_term", name_en="post_term", type="line")
     m.add_metric(metrics_name="post_terminated", expr="avg(post_terminated{})")
     m.end_panel()
     m.add_panel(name="final_stage", name_en="final_stage", type="line")
@@ -220,7 +220,7 @@ def build_monitor():
     m.add_panel(name="stage3_steps", name_en="stage3_steps", type="line")
     m.add_metric(metrics_name="stage3_steps", expr="avg(stage3_steps{})")
     m.end_panel()
-    m.add_panel(name="flash_escape_success_count", name_en="flash_escape_success_count", type="line")
+    m.add_panel(name="flash_escape_cnt", name_en="flash_escape_cnt", type="line")
     m.add_metric(metrics_name="flash_escape_success_count", expr="avg(flash_escape_success_count{})")
     m.end_panel()
     m.end_group()
@@ -229,31 +229,31 @@ def build_monitor():
     # Group 8: 终态危险分析
     # ================================================================
     m.add_group(group_name="终态危险分析", group_name_en="episode_terminal_state")
-    m.add_panel(name="final_nearest_monster_path_dist", name_en="final_nearest_monster_path_dist", type="line")
+    m.add_panel(name="final_near_m_path", name_en="final_near_m_path", type="line")
     m.add_metric(
         metrics_name="final_nearest_monster_dist_est",
         expr="avg(final_nearest_monster_dist_est{})",
     )
     m.end_panel()
-    m.add_panel(name="final_capture_margin_path", name_en="final_capture_margin_path", type="line")
+    m.add_panel(name="final_cap_margin", name_en="final_cap_margin", type="line")
     m.add_metric(
         metrics_name="final_capture_margin_path_estimate",
         expr="avg(final_capture_margin_path_estimate{})",
     )
     m.end_panel()
-    m.add_panel(name="final_encirclement_cosine", name_en="final_encirclement_cosine", type="line")
+    m.add_panel(name="final_encircle_cos", name_en="final_encircle_cos", type="line")
     m.add_metric(
         metrics_name="final_encirclement_path_cosine_estimate",
         expr="avg(final_encirclement_path_cosine_estimate{})",
     )
     m.end_panel()
-    m.add_panel(name="final_safe_direction_count", name_en="final_safe_direction_count", type="line")
+    m.add_panel(name="final_safe_dir_cnt", name_en="final_safe_dir_cnt", type="line")
     m.add_metric(
         metrics_name="final_safe_direction_path_count_estimate",
         expr="avg(final_safe_direction_path_count_estimate{})",
     )
     m.end_panel()
-    m.add_panel(name="final_visible_treasure_ratio", name_en="final_visible_treasure_ratio", type="line")
+    m.add_panel(name="final_vis_t_ratio", name_en="final_vis_t_ratio", type="line")
     m.add_metric(metrics_name="final_visible_treasure_ratio", expr="avg(final_visible_treasure_ratio{})")
     m.end_panel()
     m.add_panel(name="last_flash_used", name_en="last_flash_used", type="line")
@@ -262,10 +262,10 @@ def build_monitor():
     m.add_panel(name="last_flash_ready", name_en="last_flash_ready", type="line")
     m.add_metric(metrics_name="last_flash_ready", expr="avg(last_flash_ready{})")
     m.end_panel()
-    m.add_panel(name="last_flash_legal_ratio", name_en="last_flash_legal_ratio", type="line")
+    m.add_panel(name="last_flash_legal", name_en="last_flash_legal", type="line")
     m.add_metric(metrics_name="last_flash_legal_ratio", expr="avg(last_flash_legal_ratio{})")
     m.end_panel()
-    m.add_panel(name="last_flash_escape_improved", name_en="last_flash_escape_improved", type="line")
+    m.add_panel(name="last_flash_escape_up", name_en="last_flash_escape_up", type="line")
     m.add_metric(
         metrics_name="last_flash_escape_improved_estimate",
         expr="avg(last_flash_escape_improved_estimate{})",
@@ -277,25 +277,25 @@ def build_monitor():
     # Group 9: 全局平均状态
     # ================================================================
     m.add_group(group_name="全局平均状态", group_name_en="episode_mean_state")
-    m.add_panel(name="mean_nearest_monster_path_dist", name_en="mean_nearest_monster_path_dist", type="line")
+    m.add_panel(name="mean_near_m_path", name_en="mean_near_m_path", type="line")
     m.add_metric(
         metrics_name="mean_nearest_monster_dist_est",
         expr="avg(mean_nearest_monster_dist_est{})",
     )
     m.end_panel()
-    m.add_panel(name="mean_capture_margin_path", name_en="mean_capture_margin_path", type="line")
+    m.add_panel(name="mean_cap_margin", name_en="mean_cap_margin", type="line")
     m.add_metric(
         metrics_name="mean_capture_margin_path_estimate",
         expr="avg(mean_capture_margin_path_estimate{})",
     )
     m.end_panel()
-    m.add_panel(name="mean_encirclement_cosine", name_en="mean_encirclement_cosine", type="line")
+    m.add_panel(name="mean_encircle_cos", name_en="mean_encircle_cos", type="line")
     m.add_metric(
         metrics_name="mean_encirclement_path_cosine_estimate",
         expr="avg(mean_encirclement_path_cosine_estimate{})",
     )
     m.end_panel()
-    m.add_panel(name="mean_safe_direction_count", name_en="mean_safe_direction_count", type="line")
+    m.add_panel(name="mean_safe_dir_cnt", name_en="mean_safe_dir_cnt", type="line")
     m.add_metric(
         metrics_name="mean_safe_direction_path_count_estimate",
         expr="avg(mean_safe_direction_path_count_estimate{})",

@@ -12,7 +12,7 @@ Author: Tencent AI Arena Authors
 class Config:
     """****************************** 事件间隔 ******************************"""
     # Logger报告间隔 (秒)
-    LOG_INTERVAL = 15
+    LOG_INTERVAL = 30
     # 产出模型间隔 (秒)
     SAVE_INTERVAL = 1200
     # 读取最新模型间隔 (step)
