@@ -1,0 +1,21 @@
+[Extractor Profiler] distribution over 200 steps:
+_total                         count=   200 avg=  10.951 ms min=   0.798 ms max=  34.298 ms
+action_last                    count=   200 avg=   0.010 ms min=   0.004 ms max=   0.035 ms
+action_predict                 count=   200 avg=   0.288 ms min=   0.135 ms max=   5.709 ms
+cache_update                   count=   200 avg=   0.195 ms min=   0.074 ms max=   5.420 ms
+episode_stats                  count=   200 avg=   0.006 ms min=   0.003 ms max=   0.055 ms
+global_summary                 count=   200 avg=   0.688 ms min=   0.080 ms max=   5.875 ms
+local_map_layers               count=   200 avg=   0.589 ms min=   0.043 ms max=  10.632 ms
+map_statistics                 count=   200 avg=   0.539 ms min=   0.026 ms max=   5.620 ms
+monster_summary                count=   200 avg=   0.224 ms min=   0.048 ms max=   5.672 ms
+parse_obs                      count=   200 avg=   0.001 ms min=   0.000 ms max=   0.026 ms
+parse_obs.extra_from_env       count=   200 avg=   0.088 ms min=   0.062 ms max=   0.239 ms
+parse_obs.raw_from_env         count=   200 avg=   0.106 ms min=   0.075 ms max=   0.286 ms
+parse_obs.static_map           count=   200 avg=   3.146 ms min=   0.031 ms max=  11.217 ms
+resource_summary               count=   200 avg=   0.011 ms min=   0.005 ms max=   0.095 ms
+resource_summary.get_known     count=   200 avg=   0.007 ms min=   0.004 ms max=   0.036 ms
+resource_summary.near_resource_bfs count=   200 avg=   4.874 ms min=   0.002 ms max=  19.808 ms
+resource_summary.selection     count=   200 avg=   0.057 ms min=   0.002 ms max=   0.207 ms
+resource_summary.sort_targets  count=   200 avg=   0.004 ms min=   0.002 ms max=   0.011 ms
+space_summary                  count=   200 avg=   0.114 ms min=   0.074 ms max=   0.460 ms
+stage_info                     count=   200 avg=   0.006 ms min=   0.003 ms max=   0.055 ms

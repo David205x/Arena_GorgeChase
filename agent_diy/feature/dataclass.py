@@ -1,7 +1,7 @@
 from __future__ import annotations
 import numpy as np
 from dataclasses import dataclass, field
-from typing import Any, Self
+from typing import Any
 
 from .constant import *
 
@@ -38,7 +38,7 @@ class Character:
     """
 
     @classmethod
-    def from_env(cls, obs: dict[str, Any]) -> Self:
+    def from_env(cls, obs: dict[str, Any]) -> Character:
         pos = obs["pos"]
         entity_id = int(obs.get("hero_id", 0) or obs.get("monster_id", 0) or obs.get("config_id", 0))
         return cls(
@@ -311,14 +311,16 @@ class MonsterSummary:
 class ResourceSummary:
     nearest_known_treasure: Organ | None = None
     nearest_known_treasure_distance_l2: float | None = None
-    nearest_known_treasure_distance_path: int | None = None
+    nearest_known_treasure_distance_path: int | float | None = None
     nearest_known_treasure_direction: tuple[int, int] = (0, 0)
     nearest_known_buff: Organ | None = None
     nearest_known_buff_distance_l2: float | None = None
-    nearest_known_buff_distance_path: int | None = None
+    nearest_known_buff_distance_path: int | float | None = None
     nearest_known_buff_direction: tuple[int, int] = (0, 0)
-    nearest_known_treasure_distance_path_last: int | None = None
-    nearest_known_treasure_distance_path_delta: int | None = None
+    nearest_known_treasure_distance_path_last: int | float | None = None
+    nearest_known_treasure_distance_path_delta: int | float | None = None
+    nearest_known_buff_distance_path_last: int | float | None = None
+    nearest_known_buff_distance_path_delta: int | float | None = None
     treasure_discovered_count: int = 0
     buff_discovered_count: int = 0
     treasure_progress: float = 0.0

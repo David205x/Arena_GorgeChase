@@ -13,6 +13,8 @@ Data flow:
             → collate list[SampleData] → batch dict → Algorithm.learn()
 """
 
+import os
+
 import torch
 
 torch.set_num_threads(1)
@@ -126,8 +128,20 @@ class Agent(BaseAgent):
     def exploit(self, env_obs):
         """Greedy inference (evaluation)."""
         obs_data, _ = self.observation_process(env_obs)
-        act_data = self.predict([obs_data])
-        return self.action_process(act_data[0], is_stochastic=False)
+        feature = np.array(obs_data.feature, dtype=np.float32)
+        legal_action = np.array(obs_data.legal_action, dtype=np.float32)
+
+        probs_np, value_scalar = self._run_model(feature, legal_action)
+        action = self._sample(probs_np, use_max=True)
+        self.last_action = int(action)
+
+        act_data = ActData(
+            action=[action],
+            d_action=[action],
+            prob=list(probs_np),
+            value=[value_scalar],
+        )
+        return self.action_process(act_data, is_stochastic=False)
 
     # ------------------------------------------------------------------ action
     def action_process(self, act_data, is_stochastic=True):
@@ -150,11 +164,23 @@ class Agent(BaseAgent):
 
     def load_model(self, path=None, id="1"):
         model_file_path = f"{path}/model.ckpt-{str(id)}.pkl"
+        self.model.load_state_dict(torch.load(model_file_path, map_location=self.device))
+        self.logger.info(f"load model {model_file_path} successfully")
+
+    def load_model_local(self, path=None, id="1"):
+        if id == "latest" and not path:
+            env_path = os.environ.get("GORGE_DIY_CKPT_PATH")
+            env_id = os.environ.get("GORGE_DIY_CKPT_ID", "latest")
+            if env_path:
+                path = env_path
+                id = env_id
+
+        model_file_path = f"{path}/model.ckpt-{str(id)}.pkl"
         self.model.load_state_dict(
             torch.load(model_file_path, map_location=self.device)
         )
         if self.logger:
-            self.logger.info(f"load model {model_file_path} successfully")
+            self.logger.info(f"load local model {model_file_path} successfully")
 
     # ================================================================== private
     def _run_model(self, flat_feature, legal_action_np):
@@ -176,7 +202,15 @@ class Agent(BaseAgent):
         legal_t = torch.from_numpy(legal_action_np).unsqueeze(0).to(self.device)
 
         with torch.no_grad():
-            probs, value_logits = self.model(scalar_t, local_t, global_t, legal_t)
+            scalar_embed = self.model.scalar_encoder(scalar_t)
+            local_embed = self.model.local_encoder(local_t)
+            global_embed = self.model.global_encoder(global_t)
+            torso_in = torch.cat([scalar_embed, local_embed, global_embed], dim=-1)
+            torso_out = self.model.fusion(torso_in)
+            policy_logits_raw = self.model.policy_head(torso_out)
+            policy_logits_masked = self.model._mask_illegal(policy_logits_raw, legal_t)
+            probs = torch.softmax(policy_logits_masked, dim=-1)
+            value_logits = self.model.value_head(torso_out)
             value = self.model.value_expected(value_logits)
 
         probs_np = probs.cpu().numpy()[0]

@@ -1,86 +1,43 @@
 from __future__ import annotations
 import json
-import time
+import os
 from collections import deque
 from pathlib import Path
 from typing import Deque
+
+from agent_diy.tools.profiler import StepProfiler
 
 from .dataclass import *
 from .constant import *
 from .utils import *
 
 
-class _StepProfiler:
-    """轻量级单步计时器，用于诊断 extractor 各阶段开销。"""
+_STATIC_MAP_CACHE: dict[int, np.ndarray | None] | None = None
 
-    __slots__ = ("_enabled", "_marks", "_last", "_step_count",
-                 "_accum", "_report_interval", "_last_report")
 
-    def __init__(self, enabled: bool = False, report_interval: int = 200):
-        self._enabled = enabled
-        self._marks: list[tuple[str, float]] = []
-        self._last: float = 0.0
-        self._step_count: int = 0
-        self._accum: dict[str, float] = {}
-        self._report_interval = report_interval
-        self._last_report: int = 0
+def _load_all_static_maps() -> dict[int, np.ndarray | None]:
+    map_dir = Path(__file__).resolve().parents[1] / "ref" / "map"
+    cache: dict[int, np.ndarray | None] = {}
+    for map_id in range(1, 11):
+        map_path = map_dir / f"gorge_chase_map_{map_id}.json"
+        if not map_path.exists():
+            cache[map_id] = None
+            continue
+        with map_path.open("r", encoding="utf-8") as f:
+            data = json.load(f)
 
-    @property
-    def enabled(self) -> bool:
-        return self._enabled
-
-    def set_enabled(self, v: bool) -> None:
-        self._enabled = v
-
-    def begin(self) -> None:
-        if not self._enabled:
-            return
-        self._marks.clear()
-        self._last = time.perf_counter()
-
-    def mark(self, label: str) -> None:
-        if not self._enabled:
-            return
-        now = time.perf_counter()
-        self._marks.append((label, now - self._last))
-        self._last = now
-
-    def finish(self) -> dict[str, float] | None:
-        """返回本步各阶段耗时 (ms)；累计到内部统计。"""
-        if not self._enabled:
-            return None
-        result: dict[str, float] = {}
-        total = 0.0
-        for label, dt in self._marks:
-            ms = dt * 1000.0
-            result[label] = ms
-            total += ms
-            self._accum[label] = self._accum.get(label, 0.0) + ms
-        result["_total"] = total
-        self._accum["_total"] = self._accum.get("_total", 0.0) + total
-        self._step_count += 1
-        return result
-
-    def should_report(self) -> bool:
-        return self._enabled and self._step_count > 0 and (self._step_count - self._last_report) >= self._report_interval
-
-    def report(self, logger=None) -> str:
-        """返回并重置累计统计的格式化字符串。"""
-        n = max(self._step_count - self._last_report, 1)
-        lines = [f"[Extractor Profiler] avg over {n} steps (ms):"]
-        for label in list(self._accum.keys()):
-            avg = self._accum[label] / n
-            lines.append(f"  {label:30s} {avg:8.3f}")
-        report_str = "\n".join(lines)
-        if logger:
-            logger.info(report_str)
-        self._accum.clear()
-        self._last_report = self._step_count
-        return report_str
+        matrix = np.zeros((MAP_SIZE, MAP_SIZE), dtype=np.int8)
+        for cell in data.get("cells", []):
+            x = int(cell.get("x", -1))
+            z = int(cell.get("z", -1))
+            if 0 <= x < MAP_SIZE and 0 <= z < MAP_SIZE and int(cell.get("type_id", 0)) == 1:
+                matrix[z, x] = 1
+        cache[map_id] = matrix
+    return cache
 
 
 class Extractor:
-    def __init__(self, profile: bool = False):
+    def __init__(self, profile: bool = False, report_interval: int = 200, report_path: Path | None = None):
         # ========== current / previous
         self.current: ExtractorSnapshot = ExtractorSnapshot()
         self.previous: ExtractorSnapshot = ExtractorSnapshot()
@@ -107,7 +64,12 @@ class Extractor:
         self._last_action: int = -1
         self.episode_stats: EpisodeStats = EpisodeStats()
         # ========== profiling
-        self.profiler = _StepProfiler(enabled=profile)
+        default_report_path = Path(os.environ.get("GORGE_EXTRACTOR_PROFILE_PATH", "/data/projects/gorge_chase/agent_diy/tools/profile.txt"))
+        self.profiler = StepProfiler(
+            enabled=profile,
+            report_interval=report_interval,
+            report_path=report_path or default_report_path,
+        )
 
     def reset(self) -> None:
         """在每局开始前调用"""
@@ -147,13 +109,16 @@ class Extractor:
         self._last_action = last_action
 
         raw = RawObs.from_env(env_obs)
+        p.mark("parse_obs.raw_from_env")
         self.previous = self.current
         self.previous_extra = self.current_extra
         self.current_extra = ExtraInfo.from_env(extra_info)
+        p.mark("parse_obs.extra_from_env")
         self.current = ExtractorSnapshot(raw=raw, extra=self.current_extra)
         if self.current_extra is not None and self.current_extra.map_id >= 0:
             self.map_id = self.current_extra.map_id
             self.ensure_static_map_loaded(self.map_id)
+        p.mark("parse_obs.static_map")
         p.mark("parse_obs")
 
         self.init_resource_cache(raw)
@@ -289,26 +254,16 @@ class Extractor:
         """
         加载地图真值通行图，仅供 reward / monitor 侧做路径估计。
         """
+        global _STATIC_MAP_CACHE
+
         if self.map_static is not None and self.map_static_id == map_id:
             return
 
-        map_path = Path(__file__).resolve().parents[1] / "ref" / "map" / f"gorge_chase_map_{map_id}.json"
-        if not map_path.exists():
-            self.map_static = None
-            self.map_static_id = -1
-            return
+        if _STATIC_MAP_CACHE is None:
+            _STATIC_MAP_CACHE = _load_all_static_maps()
 
-        with map_path.open("r", encoding="utf-8") as f:
-            data = json.load(f)
-
-        matrix = np.zeros((MAP_SIZE, MAP_SIZE), dtype=np.int8)
-        for cell in data.get("cells", []):
-            x = int(cell.get("x", -1))
-            z = int(cell.get("z", -1))
-            if 0 <= x < MAP_SIZE and 0 <= z < MAP_SIZE and int(cell.get("type_id", 0)) == 1:
-                matrix[z, x] = 1
-        self.map_static = matrix
-        self.map_static_id = map_id
+        self.map_static = _STATIC_MAP_CACHE.get(map_id)
+        self.map_static_id = map_id if self.map_static is not None else -1
 
     # ======================================== derived summaries
     def compute_hero_speed(self) -> int:
@@ -519,29 +474,37 @@ class Extractor:
             return ResourceSummary()
 
         hero = raw.hero
-        treasures = self.get_known_treasures(only_available=True)
-        buffs = self.get_known_buffs(only_available=True)
+        max_candidates = 3
+        treasures_all = self.get_known_treasures(only_available=True)
+        buffs_all = self.get_known_buffs(only_available=True)
+        p = self.profiler
+        p.mark("resource_summary.get_known")
 
-        # L2 pre-sort for early-termination efficiency
-        treasures.sort(key=lambda t: (t.x - hero.x) ** 2 + (t.z - hero.z) ** 2)
-        buffs.sort(key=lambda b: (b.x - hero.x) ** 2 + (b.z - hero.z) ** 2)
+        # 使用 extractor 自维护缓存中的最后已知坐标做近似选择；环境 obs 对视野外 organs 不提供坐标。
+        treasures_all.sort(key=lambda t: (t.x - hero.x) ** 2 + (t.z - hero.z) ** 2)
+        buffs_all.sort(key=lambda b: (b.x - hero.x) ** 2 + (b.z - hero.z) ** 2)
+        treasures = treasures_all[:max_candidates]
+        buffs = buffs_all[:max_candidates]
+        p.mark("resource_summary.sort_targets")
 
-        # single BFS from hero on known map, early-terminate when all targets found
-        targets: set[tuple[int, int]] = set()
-        for t in treasures:
-            targets.add((t.x, t.z))
-        for b in buffs:
-            targets.add((b.x, b.z))
-        hero_dist = self._bfs_from_hero_known(targets)
+        near_bucket_max = 0
+        bfs_radius = 30
+        bfs_targets: set[tuple[int, int]] = {
+            (r.x, r.z)
+            for r in [*treasures, *buffs]
+            if chebyshev_distance(hero.x, hero.z, r.x, r.z) <= bfs_radius
+        }
+        hero_dist = self._bfs_from_hero_known(bfs_targets) if bfs_targets else None
+        p.mark("resource_summary.near_resource_bfs")
 
         # find nearest treasure (path-first, L2 tiebreaker)
         nearest_treasure: Organ | None = None
-        nearest_treasure_distance_path: int | None = None
+        nearest_treasure_distance_path: float | None = None
         nearest_treasure_distance_l2: float | None = None
         nearest_treasure_direction: tuple[int, int] = (0, 0)
         for t in treasures:
-            d = int(hero_dist[t.z, t.x])
-            pd = d if d >= 0 else None
+            use_bfs = chebyshev_distance(hero.x, hero.z, t.x, t.z) <= bfs_radius
+            pd = self._estimate_resource_distance(t, use_bfs=use_bfs, hero_dist=hero_dist)
             l2d = distance_l2(hero.x, hero.z, t.x, t.z)
             if pd is not None:
                 if nearest_treasure_distance_path is None or pd < nearest_treasure_distance_path or (
@@ -561,12 +524,12 @@ class Extractor:
 
         # find nearest buff (same logic)
         nearest_buff: Organ | None = None
-        nearest_buff_distance_path: int | None = None
+        nearest_buff_distance_path: float | None = None
         nearest_buff_distance_l2: float | None = None
         nearest_buff_direction: tuple[int, int] = (0, 0)
         for b in buffs:
-            d = int(hero_dist[b.z, b.x])
-            pd = d if d >= 0 else None
+            use_bfs = chebyshev_distance(hero.x, hero.z, b.x, b.z) <= bfs_radius
+            pd = self._estimate_resource_distance(b, use_bfs=use_bfs, hero_dist=hero_dist)
             l2d = distance_l2(hero.x, hero.z, b.x, b.z)
             if pd is not None:
                 if nearest_buff_distance_path is None or pd < nearest_buff_distance_path or (
@@ -586,6 +549,7 @@ class Extractor:
 
         treasure_discovered_count = len(self.get_known_treasures(only_available=False))
         buff_discovered_count = len(self.get_known_buffs(only_available=False))
+        p.mark("resource_summary.selection")
 
         treasure_progress = 0.0
         if raw.total_treasure > 0:
@@ -598,8 +562,13 @@ class Extractor:
         prev_rs = self.previous.resource_summary
         treasure_path_last = prev_rs.nearest_known_treasure_distance_path
         treasure_path_delta = None
-        if nearest_treasure_distance_path is not None and treasure_path_last is not None:
+        if nearest_treasure is not None and prev_rs.nearest_known_treasure is not None and nearest_treasure.id == prev_rs.nearest_known_treasure.id and nearest_treasure_distance_path is not None and treasure_path_last is not None:
             treasure_path_delta = nearest_treasure_distance_path - treasure_path_last
+
+        buff_path_last = prev_rs.nearest_known_buff_distance_path
+        buff_path_delta = None
+        if nearest_buff is not None and prev_rs.nearest_known_buff is not None and nearest_buff.id == prev_rs.nearest_known_buff.id and nearest_buff_distance_path is not None and buff_path_last is not None:
+            buff_path_delta = nearest_buff_distance_path - buff_path_last
 
         return ResourceSummary(
             nearest_known_treasure=nearest_treasure,
@@ -612,6 +581,8 @@ class Extractor:
             nearest_known_buff_direction=nearest_buff_direction,
             nearest_known_treasure_distance_path_last=treasure_path_last,
             nearest_known_treasure_distance_path_delta=treasure_path_delta,
+            nearest_known_buff_distance_path_last=buff_path_last,
+            nearest_known_buff_distance_path_delta=buff_path_delta,
             treasure_discovered_count=treasure_discovered_count,
             buff_discovered_count=buff_discovered_count,
             treasure_progress=treasure_progress,
@@ -1093,7 +1064,53 @@ class Extractor:
 
         return distances
 
-    def _count_safe_dirs_adjacent(self, hero, monsters) -> int:
+    def _estimate_resource_distance(self, target: Organ, use_bfs: bool, hero_dist: np.ndarray | None = None) -> float | None:
+        raw = self.current.raw
+        hero = raw.hero if raw is not None else None
+        if hero is None:
+            return None
+
+        if use_bfs and hero_dist is not None:
+            d = int(hero_dist[target.z, target.x])
+            if d >= 0:
+                return float(d)
+
+        base = float(chebyshev_distance(hero.x, hero.z, target.x, target.z))
+        wall_penalty = self._line_obstruction_penalty(hero.x, hero.z, target.x, target.z)
+        return base + wall_penalty
+
+    def _line_obstruction_penalty(self, x0: int, z0: int, x1: int, z1: int) -> float:
+        points = self._sample_line_points(x0, z0, x1, z1)
+        if not points:
+            return 0.0
+
+        unknown_count = 0
+        blocked_count = 0
+        for px, pz in points:
+            cell = int(self.map_full[pz, px])
+            if cell == -1:
+                unknown_count += 1
+            elif cell == 0:
+                blocked_count += 1
+
+        return blocked_count * 1.5 + unknown_count * 0.5
+
+    @staticmethod
+    def _sample_line_points(x0: int, z0: int, x1: int, z1: int) -> list[tuple[int, int]]:
+        steps = max(abs(x1 - x0), abs(z1 - z0))
+        if steps <= 1:
+            return []
+        points: list[tuple[int, int]] = []
+        for i in range(1, steps):
+            t = i / steps
+            x = int(round(x0 + (x1 - x0) * t))
+            z = int(round(z0 + (z1 - z0) * t))
+            point = (x, z)
+            if point not in points:
+                points.append(point)
+        return points
+
+    def _count_safe_dirs_adjacent(self, hero: Hero, monsters: list[Monster]) -> int:
         """
         等价于原 count_safe_directions_path_estimate 的 distance<=1 判断，
         但无需怪物 BFS 距离场。
