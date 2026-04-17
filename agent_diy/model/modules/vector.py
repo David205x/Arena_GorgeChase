@@ -30,9 +30,9 @@ class ResidualBlock(nn.Module):
         super().__init__()
         self.ffn = nn.Sequential(
             nn.LayerNorm(hidden_dim),
-            get_fc_layer(hidden_dim, inv_bottle_size * hidden_dim, orthogonal_init=False),
+            get_fc_layer(hidden_dim, inv_bottle_size * hidden_dim, orthogonal_init=True),
             nn.SiLU(),
-            get_fc_layer(inv_bottle_size * hidden_dim, hidden_dim, orthogonal_init=False),
+            get_fc_layer(inv_bottle_size * hidden_dim, hidden_dim, orthogonal_init=True),
         )
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:

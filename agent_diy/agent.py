@@ -42,31 +42,33 @@ _GD = Config.GLOBAL_DS                # 64
 
 
 class Agent(BaseAgent):
-    def __init__(self, agent_type="player", device=None, logger=None, monitor=None):
-        self.device = device or torch.device("cpu")
+    def __init__(self, agent_type='player', device=None, logger=None, monitor=None):
+        self.device = device or torch.device('cpu')
         self.logger = logger
         self.monitor = monitor
 
         self.algorithm = Algorithm(device=self.device, logger=logger, monitor=monitor)
         self.model = self.algorithm.model
 
-        self.extractor = Extractor()
+        self.extractor = Extractor(profile=True)
         self.last_action = -1
 
         super().__init__(agent_type, device, logger, monitor)
 
-    # ------------------------------------------------------------------ reset
+    # ================================================== reset
+
     def reset(self, env_obs=None):
         self.extractor.reset()
         self.last_action = -1
 
-    # ------------------------------------------------------------------ observation
-    def observation_process(self, env_obs):
-        """Convert raw env_obs → ObsData + remain_info."""
-        observation = env_obs["observation"]
-        extra_info = env_obs.get("extra_info")
-        terminated = bool(env_obs.get("terminated", False))
-        truncated = bool(env_obs.get("truncated", False))
+    # ================================================== process
+
+    def observation_process(self, env_obs: dict) -> tuple[ObsData, dict]:
+        """Convert raw env_obs → ObsData + info."""
+        observation = env_obs['observation']
+        extra_info = env_obs.get('extra_info')
+        terminated = bool(env_obs.get('terminated', False))
+        truncated = bool(env_obs.get('truncated', False))
 
         self.extractor.update(
             env_obs=observation,
@@ -75,115 +77,118 @@ class Agent(BaseAgent):
             truncated=truncated,
             last_action=self.last_action,
         )
+
+        # obs construction
         data = self.extractor.build_obs_state()
-
         scalar = construct_obs_scaler(data)       # (134,)
-        matrices = construct_obs_matrix(data)      # local(8,21,21), global(4,64,64)
+        matrices = construct_obs_matrix(data)     # local(8,21,21), global(4,64,64)
 
-        flat_feature = np.concatenate([
+        flat_feature: np.ndarray = np.concatenate([
             scalar,
-            matrices["local"].reshape(-1),
-            matrices["global"].reshape(-1),
+            matrices['local'].reshape(-1),
+            matrices['global'].reshape(-1),
         ]).astype(np.float32)
 
-        legal_action = data.get("legal_action")
+        legal_action = data.get('legal_action')
         if legal_action is None:
             legal_action = [1] * Config.ACTION_NUM
-        else:
-            legal_action = [int(v) for v in legal_action]
 
         obs_data = ObsData(
-            feature=list(flat_feature),
+            feature=flat_feature,
+            feature_scalar=scalar,
+            feature_local_map=matrices['local'],
+            feature_global_map=matrices['global'],
             legal_action=legal_action,
         )
 
+        # reward construction
         reward_data = self.extractor.build_reward_state()
         reward_value, reward_info = compute_reward(reward_data)
-        remain_info = {"reward": [reward_value], "reward_info": reward_info}
-        return obs_data, remain_info
 
-    # ------------------------------------------------------------------ predict
-    def predict(self, list_obs_data):
+        info = {'reward': [reward_value], 'reward_info': reward_info}
+        return obs_data, info
+
+    def action_process(self, act_data: ActData, is_stochastic=True) -> int:
+        action = act_data.action if is_stochastic else act_data.d_action
+        self.last_action = int(action)
+        return int(action)
+
+    # ================================================== predict
+
+    def predict(self, list_obs_data: list[ObsData]) -> ActData:
         """Stochastic inference (training exploration)."""
         obs_data = list_obs_data[0]
-        feature = np.array(obs_data.feature, dtype=np.float32)
-        legal_action = np.array(obs_data.legal_action, dtype=np.float32)
+        feature_scalar: np.ndarray = obs_data.feature_scalar
+        feature_local_map: np.ndarray = obs_data.feature_local_map
+        feature_global_map: np.ndarray = obs_data.feature_global_map
+        legal_action: np.ndarray = np.array(obs_data.legal_action, dtype=np.float32)
 
-        probs_np, value_scalar = self._run_model(feature, legal_action)
+        probs_np, value_scalar = self._run_model(
+            feature_scalar,
+            feature_local_map,
+            feature_global_map,
+            legal_action
+        )
 
         action = self._sample(probs_np, use_max=False)
         d_action = self._sample(probs_np, use_max=True)
         self.last_action = int(action)
 
-        return [
-            ActData(
-                action=[action],
-                d_action=[d_action],
-                prob=list(probs_np),
-                value=[value_scalar],
-            )
-        ]
-
-    # ------------------------------------------------------------------ exploit
-    def exploit(self, env_obs):
-        """Greedy inference (evaluation)."""
-        obs_data, _ = self.observation_process(env_obs)
-        feature = np.array(obs_data.feature, dtype=np.float32)
-        legal_action = np.array(obs_data.legal_action, dtype=np.float32)
-
-        probs_np, value_scalar = self._run_model(feature, legal_action)
-        action = self._sample(probs_np, use_max=True)
-        self.last_action = int(action)
-
-        act_data = ActData(
-            action=[action],
-            d_action=[action],
+        return ActData(
+            action=action,
+            d_action=d_action,
             prob=list(probs_np),
             value=[value_scalar],
         )
-        return self.action_process(act_data, is_stochastic=False)
+    
+    def exploit(self, env_obs: dict) -> int:
+        """Greedy inference (evaluation)."""
+        obs_data, _ = self.observation_process(env_obs)
+        act_data = self.predict([obs_data])
+        act = self.action_process(act_data, is_stochastic=False)
+        return act
 
-    # ------------------------------------------------------------------ action
-    def action_process(self, act_data, is_stochastic=True):
-        action = act_data.action if is_stochastic else act_data.d_action
-        self.last_action = int(action[0])
-        return int(action[0])
-
-    # ------------------------------------------------------------------ learn
     def learn(self, list_sample_data):
         batch = self._collate(list_sample_data)
-        self.algorithm.learn(batch)
+        return self.algorithm.learn(batch)
 
-    # ------------------------------------------------------------------ save / load
-    def save_model(self, path=None, id="1"):
-        model_file_path = f"{path}/model.ckpt-{str(id)}.pkl"
+    # ================================================================== save / load
+
+    def save_model(self, path=None, id='1'):
+        model_file_path = f'{path}/model.ckpt-{str(id)}.pkl'
         state_dict_cpu = {k: v.clone().cpu() for k, v in self.model.state_dict().items()}
         torch.save(state_dict_cpu, model_file_path)
         if self.logger:
-            self.logger.info(f"save model {model_file_path} successfully")
+            self.logger.info(f'save model {model_file_path} successfully')
 
-    def load_model(self, path=None, id="1"):
-        model_file_path = f"{path}/model.ckpt-{str(id)}.pkl"
+    def load_model(self, path=None, id='1'):
+        model_file_path = f'{path}/model.ckpt-{str(id)}.pkl'
         self.model.load_state_dict(torch.load(model_file_path, map_location=self.device))
-        self.logger.info(f"load model {model_file_path} successfully")
+        self.logger.info(f'load model {model_file_path} successfully')
 
-    def load_model_local(self, path=None, id="1"):
-        if id == "latest" and not path:
-            env_path = os.environ.get("GORGE_DIY_CKPT_PATH")
-            env_id = os.environ.get("GORGE_DIY_CKPT_ID", "latest")
+    def load_model_local(self, path=None, id='1'):
+        if id == 'latest' and not path:
+            env_path = os.environ.get('GORGE_DIY_CKPT_PATH')
+            env_id = os.environ.get('GORGE_DIY_CKPT_ID', 'latest')
             if env_path:
                 path = env_path
                 id = env_id
 
-        model_file_path = f"{path}/model.ckpt-{str(id)}.pkl"
+        model_file_path = f'{path}/model.ckpt-{str(id)}.pkl'
         self.model.load_state_dict(
             torch.load(model_file_path, map_location=self.device)
         )
         if self.logger:
-            self.logger.info(f"load local model {model_file_path} successfully")
+            self.logger.info(f'load local model {model_file_path} successfully')
 
     # ================================================================== private
-    def _run_model(self, flat_feature, legal_action_np):
+
+    def _run_model(self, 
+            feature_scalar,
+            feature_local_map,
+            feature_global_map,
+            legal_action,
+        ):
         """Run model forward on a single observation.
 
         Returns:
@@ -192,25 +197,13 @@ class Agent(BaseAgent):
         """
         self.model.set_eval_mode()
 
-        scalar_t = torch.from_numpy(flat_feature[:_S]).unsqueeze(0).to(self.device)
-        local_t = torch.from_numpy(
-            flat_feature[_S:_S + _L].reshape(_LC, _LH, _LW)
-        ).unsqueeze(0).to(self.device)
-        global_t = torch.from_numpy(
-            flat_feature[_S + _L:].reshape(_GC, _GD, _GD)
-        ).unsqueeze(0).to(self.device)
-        legal_t = torch.from_numpy(legal_action_np).unsqueeze(0).to(self.device)
+        scalar_t = torch.from_numpy(feature_scalar).unsqueeze(0).to(self.device)
+        local_t = torch.from_numpy(feature_local_map).unsqueeze(0).to(self.device)
+        global_t = torch.from_numpy(feature_global_map).unsqueeze(0).to(self.device)
+        legal_t = torch.from_numpy(legal_action).unsqueeze(0).to(self.device)
 
         with torch.no_grad():
-            scalar_embed = self.model.scalar_encoder(scalar_t)
-            local_embed = self.model.local_encoder(local_t)
-            global_embed = self.model.global_encoder(global_t)
-            torso_in = torch.cat([scalar_embed, local_embed, global_embed], dim=-1)
-            torso_out = self.model.fusion(torso_in)
-            policy_logits_raw = self.model.policy_head(torso_out)
-            policy_logits_masked = self.model._mask_illegal(policy_logits_raw, legal_t)
-            probs = torch.softmax(policy_logits_masked, dim=-1)
-            value_logits = self.model.value_head(torso_out)
+            probs, value_logits = self.model(scalar_t, local_t, global_t, legal_t)
             value = self.model.value_expected(value_logits)
 
         probs_np = probs.cpu().numpy()[0]
@@ -228,24 +221,24 @@ class Agent(BaseAgent):
         ])
         action_ids = [int(self._scalar_item(s.act)) for s in list_sample_data]
         batch = {
-            "scalar":       obs_flat[:, :_S],
-            "local_map":    obs_flat[:, _S:_S + _L].reshape(-1, _LC, _LH, _LW),
-            "global_map":   obs_flat[:, _S + _L:].reshape(-1, _GC, _GD, _GD),
-            "legal_action": torch.stack([torch.as_tensor(s.legal_action, dtype=torch.float32) for s in list_sample_data]),
-            "old_action":   torch.tensor(action_ids, dtype=torch.long).view(-1, 1),
-            "old_prob":     torch.tensor([
+            'scalar':       obs_flat[:, :_S],
+            'local_map':    obs_flat[:, _S:_S + _L].reshape(-1, _LC, _LH, _LW),
+            'global_map':   obs_flat[:, _S + _L:].reshape(-1, _GC, _GD, _GD),
+            'legal_action': torch.stack([torch.as_tensor(s.legal_action, dtype=torch.float32) for s in list_sample_data]),
+            'old_action':   torch.tensor(action_ids, dtype=torch.long).view(-1, 1),
+            'old_prob':     torch.tensor([
                 [float(torch.as_tensor(s.prob, dtype=torch.float32)[action_id].item())]
                 for s, action_id in zip(list_sample_data, action_ids)
             ], dtype=torch.float32),
-            "reward":       torch.stack([
+            'reward':       torch.stack([
                 torch.as_tensor(self._scalar_item(s.reward), dtype=torch.float32)
                 for s in list_sample_data
             ]),
-            "advantage":    torch.stack([
+            'advantage':    torch.stack([
                 torch.as_tensor(self._scalar_item(s.advantage), dtype=torch.float32)
                 for s in list_sample_data
             ]),
-            "td_return":    torch.stack([
+            'td_return':    torch.stack([
                 torch.as_tensor(self._scalar_item(s.td_return), dtype=torch.float32)
                 for s in list_sample_data
             ]),

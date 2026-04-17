@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import datetime
 import time
 from pathlib import Path
 
@@ -98,7 +99,11 @@ class StepProfiler:
 
     def build_report(self) -> str:
         steps = max(self._step_count - self._last_report, 1)
-        lines = [f"[Extractor Profiler] distribution over {steps} steps:"]
+        timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        lines = [
+            f"[Extractor Profiler] recorded at: {timestamp}",
+            f"[Extractor Profiler] distribution over {steps} steps:",
+        ]
         for label in sorted(self._series.keys()):
             summary = self._series[label].summary()
             lines.append(

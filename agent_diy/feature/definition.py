@@ -13,15 +13,18 @@ from agent_diy.conf.conf import Config
 # ======================== ObsData ========================
 ObsData = create_cls(
     "ObsData",
-    feature=None,         # flat np.float32 (OBS_FLAT_DIM,) for framework serialisation
-    legal_action=None,    # list[int] length=16
+    feature=None,
+    feature_scalar=None,
+    feature_local_map=None,
+    feature_global_map=None,    # flat np.float32
+    legal_action=None,          # list[int] length=16
 )
 
 # ======================== ActData ========================
 ActData = create_cls(
     "ActData",
-    action=None,          # [int]     sampled action
-    d_action=None,        # [int]     greedy (deterministic) action
+    action=None,          # int     sampled action
+    d_action=None,        # int     greedy (deterministic) action
     prob=None,            # list      full prob distribution (16,)
     value=None,           # list/ndarray scalar expected value
 )

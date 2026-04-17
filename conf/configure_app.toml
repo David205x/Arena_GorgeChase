@@ -34,13 +34,13 @@ reverb_sampler = "reverb.selectors.Uniform"
 # 参数reverb_samples_per_insert: 每插入1条样本允许采样的最大次数（仅SampleToInsertRatio模式生效）
 # reverb_error_buffer: Tolerance buffer for ratio constraint, similar to TCP sliding window (only for SampleToInsertRatio)
 # 参数reverb_error_buffer: 比例限制的弹性缓冲区间，类似TCP滑动窗口（仅SampleToInsertRatio模式生效）
-reverb_rate_limiter = "MinSize"
-reverb_samples_per_insert = 5
+reverb_rate_limiter = "SampleToInsertRatio"
+reverb_samples_per_insert = 2
 reverb_error_buffer = 5
 
 # Training batch size limit for Learner
 # Learner训练时样本批处理大小
-train_batch_size = 2048
+train_batch_size = 1024
 
 # Model dump frequency (steps)
 # 训练间隔多少步输出模型参数文件

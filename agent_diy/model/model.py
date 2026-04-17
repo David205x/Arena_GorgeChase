@@ -29,8 +29,8 @@ GLOBAL_CH = 4
 ACTION_NUM = 16         # 8 move + 8 flash
 
 VF_N_BINS = 51
-VF_MIN = -10.0
-VF_MAX = 10.0
+VF_MIN = -30.0
+VF_MAX = 30.0
 
 VECTOR_EMBED = 256
 VISION_EMBED = 128

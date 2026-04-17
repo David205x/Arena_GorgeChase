@@ -44,7 +44,11 @@ MONITOR_BATCH_KEYS = (
     "old_prob_max",
     "new_prob_min",
     "new_prob_max",
+    "explained_var",
     "grad_norm",
+    "grad_norm_post_clip",
+    "grad_clip_ratio",
+    "param_update_rms",
     "batch_non_finite_count",
     "loss_non_finite",
     "grad_non_finite",
@@ -123,13 +127,16 @@ class Algorithm:
 
         batch_stats = self._collect_batch_stats(reward, adv, td_return, old_prob)
 
+        params_before_step = [param.detach().clone() for param in self.parameters]
         new_probs, value_logits = self.model(scalar, local_map, global_map, legal_action)
+        value_pred = self.model.value_expected(value_logits).squeeze(-1)
 
         total_loss, info = self._compute_loss(
             new_probs, value_logits, old_action, old_prob, adv, td_return,
         )
         batch_stats["new_prob_min"] = float(new_probs.min().item())
         batch_stats["new_prob_max"] = float(new_probs.max().item())
+        batch_stats["explained_var"] = self._explained_variance(value_pred.detach(), td_return)
         batch_stats["loss_non_finite"] = float(
             not all(
                 torch.isfinite(x).all().item()
@@ -141,13 +148,21 @@ class Algorithm:
         grad_norm = 0.0
         if GRAD_CLIP_NORM > 0:
             grad_norm = float(torch.nn.utils.clip_grad_norm_(self.parameters, GRAD_CLIP_NORM).item())
+        else:
+            grad_norm = self._grad_norm()
         batch_stats["grad_norm"] = grad_norm
+        post_clip_grad_norm = self._grad_norm()
+        batch_stats["grad_norm_post_clip"] = post_clip_grad_norm
+        batch_stats["grad_clip_ratio"] = (
+            post_clip_grad_norm / grad_norm if math.isfinite(grad_norm) and grad_norm > 1e-12 else 1.0
+        )
         batch_stats["grad_non_finite"] = float(self._has_non_finite_grad())
         self.optimizer.step()
+        batch_stats["param_update_rms"] = self._param_update_rms(params_before_step)
         batch_stats["param_non_finite"] = float(self._has_non_finite_param())
         self.train_step += 1
 
-        self._maybe_report(total_loss, info, batch_stats)
+        return self._maybe_report(total_loss, info, batch_stats)
 
     # ----------------------------------------------------------- loss
     def _compute_loss(self, new_probs, value_logits, old_action, old_prob, adv, td_return):
@@ -235,6 +250,37 @@ class Algorithm:
                 return True
         return False
 
+    def _grad_norm(self) -> float:
+        total_sq = 0.0
+        for param in self.parameters:
+            if param.grad is None:
+                continue
+            grad_sq = float(param.grad.detach().pow(2).sum().item())
+            total_sq += grad_sq
+        return math.sqrt(total_sq)
+
+    def _param_update_rms(self, params_before_step: list[torch.Tensor]) -> float:
+        update_sq = 0.0
+        param_count = 0
+        for before, after in zip(params_before_step, self.parameters):
+            delta = after.detach() - before
+            update_sq += float(delta.pow(2).sum().item())
+            param_count += int(delta.numel())
+        if param_count == 0:
+            return 0.0
+        return math.sqrt(update_sq / param_count)
+
+    @staticmethod
+    def _explained_variance(value_pred: torch.Tensor, td_return: torch.Tensor) -> float:
+        target_var = torch.var(td_return, unbiased=False)
+        if not torch.isfinite(target_var).all().item() or float(target_var.item()) <= 1e-12:
+            return 0.0
+        residual_var = torch.var(td_return - value_pred, unbiased=False)
+        if not torch.isfinite(residual_var).all().item():
+            return 0.0
+        ev = 1.0 - float(residual_var.item() / target_var.item())
+        return max(-1.0, min(1.0, ev))
+
     def _has_non_finite_param(self) -> bool:
         for param in self.parameters:
             if not torch.isfinite(param).all().item():
@@ -272,11 +318,6 @@ class Algorithm:
     def _maybe_report(self, total_loss, info, stats):
         self._warn_if_unstable(total_loss, info, stats)
 
-        now = time.time()
-        if now - self.last_report_time < LOG_INTERVAL:
-            return
-        self.last_report_time = now
-
         results = {
             "total_loss": round(total_loss.item(), 4),
             "value_loss": round(info["value_loss"].item(), 4),
@@ -295,13 +336,22 @@ class Algorithm:
             "old_prob_max": round(stats["old_prob_max"], 6),
             "new_prob_min": round(stats["new_prob_min"], 6),
             "new_prob_max": round(stats["new_prob_max"], 6),
+            "explained_var": round(stats["explained_var"], 6),
             "grad_norm": round(stats["grad_norm"], 6) if math.isfinite(stats["grad_norm"]) else stats["grad_norm"],
+            "grad_norm_post_clip": round(stats["grad_norm_post_clip"], 6) if math.isfinite(stats["grad_norm_post_clip"]) else stats["grad_norm_post_clip"],
+            "grad_clip_ratio": round(stats["grad_clip_ratio"], 6) if math.isfinite(stats["grad_clip_ratio"]) else stats["grad_clip_ratio"],
+            "param_update_rms": round(stats["param_update_rms"], 8) if math.isfinite(stats["param_update_rms"]) else stats["param_update_rms"],
             "batch_non_finite_count": int(stats["batch_non_finite_count"]),
             "loss_non_finite": int(stats["loss_non_finite"]),
             "grad_non_finite": int(stats["grad_non_finite"]),
             "param_non_finite": int(stats["param_non_finite"]),
         }
         self.last_monitor_results = results
+
+        now = time.time()
+        if now - self.last_report_time < LOG_INTERVAL:
+            return results
+        self.last_report_time = now
 
         if self.logger:
             self.logger.info(
@@ -311,12 +361,16 @@ class Algorithm:
                 f"vf={results['value_loss']} "
                 f"ent={results['entropy']} "
                 f"clip={results['clipfrac']} "
+                f"ev={results['explained_var']} "
                 f"adv=[{results['adv_min']},{results['adv_max']}] "
                 f"td=[{results['td_return_min']},{results['td_return_max']}] "
-                f"grad={results['grad_norm']}"
+                f"grad_pre={results['grad_norm']} "
+                f"grad_post={results['grad_norm_post_clip']} "
+                f"upd_rms={results['param_update_rms']}"
             )
         if self.monitor:
             self.monitor.put_data({os.getpid(): results})
+        return results
 
     # ----------------------------------------------------------- mode helpers
     def set_train_mode(self):

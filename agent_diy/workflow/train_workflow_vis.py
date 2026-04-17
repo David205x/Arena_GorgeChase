@@ -8,6 +8,7 @@ Author: Tencent AI Arena Authors
 """
 
 import json
+import os
 import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -24,6 +25,9 @@ from agent_diy.feature.extractor import Extractor
 from agent_diy.feature.reward import compute_reward
 from agent_diy.monitor.web_control_server import WebControlServer
 
+os.environ["GORGE_DIY_CKPT_PATH"] = "/data/projects/gorge_chase/ckpt"
+os.environ["GORGE_DIY_CKPT_ID"] = "1773"
+UPDATE_INTERVAL = 0.2
 
 class EpisodeRunner:
     def __init__(self, env, agent, usr_conf, logger, monitor):
@@ -85,11 +89,6 @@ class EpisodeRunner:
         self.web_server.start()
         while True:
             now = time.time()
-            if now - self.last_get_training_metrics_time >= 60:
-                metrics = get_training_metrics()
-                self.last_get_training_metrics_time = now
-                if metrics is not None:
-                    self.logger.info(f"training_metrics is {metrics}")
 
             env_obs = self.env.reset(self.usr_conf)
             self.web_server.reset_episode_history()
@@ -100,10 +99,6 @@ class EpisodeRunner:
 
             if hasattr(self.agent, "reset"):
                 self.agent.reset(env_obs)
-            try:
-                self.agent.load_model(id="latest")
-            except Exception as exc:
-                self.logger.info(f"load_model skipped: {exc}")
 
             self.episode_cnt += 1
             step = 0
@@ -117,10 +112,12 @@ class EpisodeRunner:
             )
 
             while not done:
-                action = self.web_server.wait_for_action()
+                time.sleep(UPDATE_INTERVAL)
+                action = self.agent.exploit(env_obs)
+                # action = self.web_server.wait_for_action()
                 env_reward, env_obs = self.env.step(action)
-                with open('/data/projects/gorge_chase/agent_diy/sample_obs.json', 'w') as f:
-                    json.dump(env_obs, f, indent=2)
+                # with open('/data/projects/gorge_chase/agent_diy/sample_obs.json', 'w') as f:
+                #     json.dump(env_obs, f, indent=2)
 
                 if handle_disaster_recovery(env_obs, self.logger):
                     extractor_view = self._build_extractor_view(env_obs)
@@ -158,6 +155,12 @@ def workflow(envs, agents, logger=None, monitor=None, *args, **kwargs):
     usr_conf = read_usr_conf("agent_diy/conf/train_env_conf.toml", logger)
     if usr_conf is None:
         logger.error("usr_conf is None, please check agent_diy/conf/train_env_conf.toml")
-        return
-    EpisodeRunner(env=env, agent=agent, usr_conf=usr_conf, logger=logger, monitor=monitor).run()
+    
+    ckpt_path = os.environ.get("GORGE_DIY_CKPT_PATH")
+    ckpt_id = os.environ.get("GORGE_DIY_CKPT_ID", "latest")
+    if not ckpt_path:
+        raise ValueError("GORGE_DIY_CKPT_PATH is required for workflow_exploit")
+    agent.load_model_local(path=ckpt_path, id=ckpt_id)
+
+    return EpisodeRunner(env=env, agent=agent, usr_conf=usr_conf, logger=logger, monitor=monitor).run()
 

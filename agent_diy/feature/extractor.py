@@ -1,6 +1,7 @@
 from __future__ import annotations
 import json
 import os
+import time
 from collections import deque
 from pathlib import Path
 from typing import Deque
@@ -12,7 +13,69 @@ from .constant import *
 from .utils import *
 
 
-_STATIC_MAP_CACHE: dict[int, np.ndarray | None] | None = None
+_STATIC_MAP_CACHE: dict[int, np.ndarray | None]
+_STATIC_DISTANCE_CACHE: dict[int, dict[str, np.ndarray] | None]
+
+
+def _can_step_on_static_map(static_map: np.ndarray, x: int, z: int, nx: int, nz: int) -> bool:
+    if nx < 0 or nx >= MAP_SIZE or nz < 0 or nz >= MAP_SIZE:
+        return False
+    if static_map[nz, nx] != 1:
+        return False
+    dx = nx - x
+    dz = nz - z
+    if abs(dx) > 1 or abs(dz) > 1:
+        return False
+    if dx != 0 and dz != 0:
+        side1_ok = 0 <= x + dx < MAP_SIZE and static_map[z, x + dx] == 1
+        side2_ok = 0 <= z + dz < MAP_SIZE and static_map[z + dz, x] == 1
+        return bool(side1_ok or side2_ok)
+    return True
+
+
+def _build_static_distance_cache(static_map: np.ndarray | None) -> dict[str, np.ndarray] | None:
+    if static_map is None:
+        return None
+
+    legal_pos_zy = np.argwhere(static_map == 0)
+    if legal_pos_zy.size == 0:
+        return None
+
+    legal_coords = np.stack([legal_pos_zy[:, 1], legal_pos_zy[:, 0]], axis=1).astype(np.int16)
+    point_count = int(legal_coords.shape[0])
+    index_map = np.full((MAP_SIZE, MAP_SIZE), -1, dtype=np.int32)
+    index_map[legal_coords[:, 1], legal_coords[:, 0]] = np.arange(point_count, dtype=np.int32)
+
+    unreachable = np.uint16(np.iinfo(np.uint16).max)
+    dist_matrix = np.full((point_count, point_count), unreachable, dtype=np.uint16)
+    field = np.full((MAP_SIZE, MAP_SIZE), -1, dtype=np.int16)
+
+    for src_idx, (sx, sz) in enumerate(legal_coords):
+        field.fill(-1)
+        field[sz, sx] = 0
+        queue = deque[tuple[int, int]]([(int(sx), int(sz))])
+
+        while queue:
+            x, z = queue.popleft()
+            for dx, dz in MOVE_DIR_VEC:
+                nx, nz = x + dx, z + dz
+                if not _can_step_on_static_map(static_map, x, z, nx, nz):
+                    continue
+                if field[nz, nx] != -1:
+                    continue
+                field[nz, nx] = field[z, x] + 1
+                queue.append((nx, nz))
+
+        dist_row = field[legal_coords[:, 1], legal_coords[:, 0]]
+        reachable_mask = dist_row >= 0
+        dist_matrix[src_idx, reachable_mask] = dist_row[reachable_mask].astype(np.uint16)
+        dist_matrix[src_idx, src_idx] = 0
+
+    return {
+        "legal_coords": legal_coords,
+        "index_map": index_map,
+        "dist_matrix": dist_matrix,
+    }
 
 
 def _load_all_static_maps() -> dict[int, np.ndarray | None]:
@@ -36,6 +99,38 @@ def _load_all_static_maps() -> dict[int, np.ndarray | None]:
     return cache
 
 
+def _load_all_static_distance_cache(
+    static_map_cache: dict[int, np.ndarray | None],
+) -> dict[int, dict[str, np.ndarray] | None]:
+    ret = {}
+    for map_id, static_map in static_map_cache.items():
+        t = time.time()
+        ret[map_id] = _build_static_distance_cache(static_map)
+        print(f'{map_id=} constructed in {time.time() - t}s')
+        print('='*30)
+    return ret
+
+
+def _load_all_static_distance_cache_local(static_map_cache: dict[int, np.ndarray | None]):
+    d = Path(__file__).resolve().parent / 'dist_cache'
+    ret = {}
+    for map_id, static_map in static_map_cache.items():
+        t = time.time()
+        ret[map_id] = {
+            "legal_coords": np.load(d / f'legal_coords_{map_id}.npy'),
+            "index_map": np.load(d / f'index_map_{map_id}.npy'),
+            "dist_matrix": np.load(d / f'dist_matrix_{map_id}.npy'),
+        }
+        print(f'{map_id=} cache loaded in {time.time() - t}s')
+        print('='*30)
+    return ret
+
+
+_STATIC_MAP_CACHE = _load_all_static_maps()
+# _STATIC_DISTANCE_CACHE = _load_all_static_distance_cache(_STATIC_MAP_CACHE)
+_STATIC_DISTANCE_CACHE = _load_all_static_distance_cache_local(_STATIC_MAP_CACHE)
+
+
 class Extractor:
     def __init__(self, profile: bool = False, report_interval: int = 200, report_path: Path | None = None):
         # ========== current / previous
@@ -48,6 +143,7 @@ class Extractor:
         self.map_full: np.ndarray = np.full((MAP_SIZE, MAP_SIZE), -1, dtype=np.int8)
         """-1=未探索, 0=已探索不可通行, 1=已探索可通行"""
         self.map_static: np.ndarray | None = None
+        self.map_static_distance_cache: dict[str, np.ndarray] | None = None
         self.map_static_id: int = -1
         self.visit_count: np.ndarray = np.zeros((MAP_SIZE, MAP_SIZE), dtype=np.int32)
         self.visit_coverage: np.ndarray = np.zeros((MAP_SIZE, MAP_SIZE), dtype=np.float32)
@@ -80,6 +176,7 @@ class Extractor:
         self.map_id = -1
         self.map_full = np.full((MAP_SIZE, MAP_SIZE), -1, dtype=np.int8)
         self.map_static = None
+        self.map_static_distance_cache = None
         self.map_static_id = -1
         self.visit_count = np.zeros((MAP_SIZE, MAP_SIZE), dtype=np.int32)
         self.visit_coverage = np.zeros((MAP_SIZE, MAP_SIZE), dtype=np.float32)
@@ -155,7 +252,9 @@ class Extractor:
         self.current.space_summary = self.compute_space_summary()
         p.mark("space_summary")
 
-        self.current.global_summary = self.compute_global_summary()
+        # BFS/path 相关的全局危险估计暂时停用，避免在 update 主链中继续计算。
+        # self.current.global_summary = self.compute_global_summary()
+        self.current.global_summary = GlobalSummary()
         p.mark("global_summary")
 
         self.update_episode_stats()
@@ -254,15 +353,8 @@ class Extractor:
         """
         加载地图真值通行图，仅供 reward / monitor 侧做路径估计。
         """
-        global _STATIC_MAP_CACHE
-
-        if self.map_static is not None and self.map_static_id == map_id:
-            return
-
-        if _STATIC_MAP_CACHE is None:
-            _STATIC_MAP_CACHE = _load_all_static_maps()
-
         self.map_static = _STATIC_MAP_CACHE.get(map_id)
+        self.map_static_distance_cache = _STATIC_DISTANCE_CACHE.get(map_id)
         self.map_static_id = map_id if self.map_static is not None else -1
 
     # ======================================== derived summaries
@@ -357,7 +449,6 @@ class Extractor:
             flash_valid_mask=flash_result.flash_valid_mask,
             flash_distance=flash_result.flash_distance,
             flash_across_wall=flash_result.flash_across_wall,
-            action_preferred=move_valid_mask + flash_result.flash_valid_mask, #TODO
         )
 
     def compute_monster_summary(self) -> MonsterSummary:
@@ -487,33 +578,22 @@ class Extractor:
         buffs = buffs_all[:max_candidates]
         p.mark("resource_summary.sort_targets")
 
-        near_bucket_max = 0
-        bfs_radius = 30
-        bfs_targets: set[tuple[int, int]] = {
-            (r.x, r.z)
-            for r in [*treasures, *buffs]
-            if chebyshev_distance(hero.x, hero.z, r.x, r.z) <= bfs_radius
-        }
-        hero_dist = self._bfs_from_hero_known(bfs_targets) if bfs_targets else None
-        p.mark("resource_summary.near_resource_bfs")
+        # near_bucket_max = 0
+        # bfs_radius = 30
+        # bfs_targets: set[tuple[int, int]] = {
+        #     (r.x, r.z)
+        #     for r in [*treasures, *buffs]
+        #     if chebyshev_distance(hero.x, hero.z, r.x, r.z) <= bfs_radius
+        # }
+        # hero_dist = self._bfs_from_hero_known(bfs_targets) if bfs_targets else None
+        # p.mark("resource_summary.near_resource_bfs")
 
-        # find nearest treasure (path-first, L2 tiebreaker)
         nearest_treasure: Organ | None = None
-        nearest_treasure_distance_path: float | None = None
         nearest_treasure_distance_l2: float | None = None
         nearest_treasure_direction: tuple[int, int] = (0, 0)
         for t in treasures:
-            use_bfs = chebyshev_distance(hero.x, hero.z, t.x, t.z) <= bfs_radius
-            pd = self._estimate_resource_distance(t, use_bfs=use_bfs, hero_dist=hero_dist)
             l2d = distance_l2(hero.x, hero.z, t.x, t.z)
-            if pd is not None:
-                if nearest_treasure_distance_path is None or pd < nearest_treasure_distance_path or (
-                    pd == nearest_treasure_distance_path and l2d < (nearest_treasure_distance_l2 if nearest_treasure_distance_l2 is not None else float("inf"))
-                ):
-                    nearest_treasure = t
-                    nearest_treasure_distance_path = pd
-                    nearest_treasure_distance_l2 = l2d
-            elif nearest_treasure_distance_path is None and (nearest_treasure_distance_l2 is None or l2d < nearest_treasure_distance_l2):
+            if nearest_treasure_distance_l2 is None or l2d < nearest_treasure_distance_l2:
                 nearest_treasure = t
                 nearest_treasure_distance_l2 = l2d
         if nearest_treasure is not None:
@@ -524,21 +604,14 @@ class Extractor:
 
         # find nearest buff (same logic)
         nearest_buff: Organ | None = None
-        nearest_buff_distance_path: float | None = None
+        # nearest_buff_distance_path: float | None = None
         nearest_buff_distance_l2: float | None = None
         nearest_buff_direction: tuple[int, int] = (0, 0)
         for b in buffs:
-            use_bfs = chebyshev_distance(hero.x, hero.z, b.x, b.z) <= bfs_radius
-            pd = self._estimate_resource_distance(b, use_bfs=use_bfs, hero_dist=hero_dist)
+            # use_bfs = chebyshev_distance(hero.x, hero.z, b.x, b.z) <= bfs_radius
+            # pd = self._estimate_resource_distance(b, use_bfs=use_bfs, hero_dist=hero_dist)
             l2d = distance_l2(hero.x, hero.z, b.x, b.z)
-            if pd is not None:
-                if nearest_buff_distance_path is None or pd < nearest_buff_distance_path or (
-                    pd == nearest_buff_distance_path and l2d < (nearest_buff_distance_l2 if nearest_buff_distance_l2 is not None else float("inf"))
-                ):
-                    nearest_buff = b
-                    nearest_buff_distance_path = pd
-                    nearest_buff_distance_l2 = l2d
-            elif nearest_buff_distance_path is None and (nearest_buff_distance_l2 is None or l2d < nearest_buff_distance_l2):
+            if nearest_buff_distance_l2 is None or l2d < nearest_buff_distance_l2:
                 nearest_buff = b
                 nearest_buff_distance_l2 = l2d
         if nearest_buff is not None:
@@ -559,15 +632,52 @@ class Extractor:
         if raw.total_buff > 0:
             buff_progress = raw.collected_buff / raw.total_buff
 
-        prev_rs = self.previous.resource_summary
-        treasure_path_last = prev_rs.nearest_known_treasure_distance_path
-        treasure_path_delta = None
-        if nearest_treasure is not None and prev_rs.nearest_known_treasure is not None and nearest_treasure.id == prev_rs.nearest_known_treasure.id and nearest_treasure_distance_path is not None and treasure_path_last is not None:
+        # reward 侧资源接近奖励改为复用静态距离缓存。
+        resource_map_id: int = self.map_id if self.map_id >= 0 else self.map_static_id
+
+        def cached_distance(target: Organ | None) -> int | None:
+            if target is None or resource_map_id < 0:
+                return None
+            return self.query_static_distance(
+                int(resource_map_id),
+                int(hero.x),
+                int(hero.z),
+                int(target.x),
+                int(target.z),
+            )
+
+        nearest_treasure_distance_path: int | None = cached_distance(nearest_treasure)
+        nearest_buff_distance_path: int | None = cached_distance(nearest_buff)
+
+        prev_rs: ResourceSummary = self.previous.resource_summary
+        treasure_path_last: int | None = (
+            int(prev_rs.nearest_known_treasure_distance_path)
+            if prev_rs.nearest_known_treasure_distance_path is not None
+            else None
+        )
+        treasure_path_delta: int | None = None
+        if (
+            nearest_treasure is not None
+            and prev_rs.nearest_known_treasure is not None
+            and nearest_treasure.id == prev_rs.nearest_known_treasure.id
+            and nearest_treasure_distance_path is not None
+            and treasure_path_last is not None
+        ):
             treasure_path_delta = nearest_treasure_distance_path - treasure_path_last
 
-        buff_path_last = prev_rs.nearest_known_buff_distance_path
-        buff_path_delta = None
-        if nearest_buff is not None and prev_rs.nearest_known_buff is not None and nearest_buff.id == prev_rs.nearest_known_buff.id and nearest_buff_distance_path is not None and buff_path_last is not None:
+        buff_path_last: int | None = (
+            int(prev_rs.nearest_known_buff_distance_path)
+            if prev_rs.nearest_known_buff_distance_path is not None
+            else None
+        )
+        buff_path_delta: int | None = None
+        if (
+            nearest_buff is not None
+            and prev_rs.nearest_known_buff is not None
+            and nearest_buff.id == prev_rs.nearest_known_buff.id
+            and nearest_buff_distance_path is not None
+            and buff_path_last is not None
+        ):
             buff_path_delta = nearest_buff_distance_path - buff_path_last
 
         return ResourceSummary(
@@ -688,7 +798,7 @@ class Extractor:
         for monster in monsters:
             pd = self._lookup_static_dist(hero_dist, monster.x, monster.z)
             approach = self._trace_approach_direction(
-                hero_dist, direction_from, monster.x, monster.z, hero.x, hero.z,
+                hero_dist, direction_from, monster.x, monster.z,
             )
             monster_entries.append({
                 "monster": monster,
@@ -749,7 +859,6 @@ class Extractor:
 
         return GlobalSummary(
             nearest_monster=nearest,
-            second_monster=second,
             nearest_monster_distance=nearest_distance,
             second_monster_distance=second_distance,
             nearest_monster_distance_last=nearest_distance_last,
@@ -941,7 +1050,31 @@ class Extractor:
             return self.is_walkable_static(x + dx, z) or self.is_walkable_static(x, z + dz)
         return True
 
-    # ==================== BFS helpers (optimized) ====================
+    def query_static_distance(self, map_id: int, start_x: int, start_z: int, target_x: int, target_z: int) -> int | None:
+        """查询静态地图上两合法点之间的预计算最短距离。"""
+        if self.map_static_id != map_id:
+            self.ensure_static_map_loaded(map_id)
+
+        cache = self.map_static_distance_cache
+        if cache is None:
+            return None
+
+        index_map = cache["index_map"]
+        if not (0 <= start_x < MAP_SIZE and 0 <= start_z < MAP_SIZE and 0 <= target_x < MAP_SIZE and 0 <= target_z < MAP_SIZE):
+            return None
+
+        src_idx = int(index_map[start_z, start_x])
+        tgt_idx = int(index_map[target_z, target_x])
+        if src_idx < 0 or tgt_idx < 0:
+            return None
+
+        dist = int(cache["dist_matrix"][src_idx, tgt_idx])
+        unreachable = int(np.iinfo(np.uint16).max)
+        return None if dist == unreachable else dist
+
+    # ==================== BFS helpers (currently disabled in update path) ====================
+    # 以下函数保留实现与注释，供后续 reward/analysis 迁移或替换时参考；
+    # 当前 extractor.update() 主链不再调用这些 BFS/path 相关逻辑。
 
     def _bfs_from_hero_static(
         self, targets: set[tuple[int, int]]
@@ -998,8 +1131,6 @@ class Extractor:
         direction_from: np.ndarray,
         target_x: int,
         target_z: int,
-        hero_x: int,
-        hero_z: int,
         tail_steps: int = 3,
     ) -> tuple[int, int]:
         """
@@ -1264,14 +1395,8 @@ class Extractor:
         stats = self.episode_stats
         global_summary = self.current.global_summary
         reward_delta = self.current.action_last.reward_delta
-        flash_escape_improved_estimate = (
-            reward_delta.flash_count_delta > 0
-            and (
-                (global_summary.nearest_monster_path_distance_delta_estimate or 0) > 0
-                or (global_summary.capture_margin_path_delta_estimate or 0) > 0
-                or global_summary.safe_direction_path_count_delta_estimate > 0
-            )
-        )
+        # BFS/path 相关全局估计停用后，该派生信号默认关闭。
+        flash_escape_improved_estimate = False
         step_delta = raw.step - (self.previous.raw.step if self.previous.raw is not None else 0)
         step_delta = max(step_delta, 0)
 
@@ -1544,16 +1669,9 @@ class Extractor:
         消费方通过 summary 对象访问属性，不再展开到顶层。
         """
         raw = self.current.raw
-        reward_delta = self.current.action_last.reward_delta
         global_summary = self.current.global_summary
-        flash_escape_improved_estimate = (
-            reward_delta.flash_count_delta > 0
-            and (
-                (global_summary.nearest_monster_path_distance_delta_estimate or 0) > 0
-                or (global_summary.capture_margin_path_delta_estimate or 0) > 0
-                or global_summary.safe_direction_path_count_delta_estimate > 0
-            )
-        )
+        # BFS/path 相关全局估计停用后，该派生信号默认关闭。
+        flash_escape_improved_estimate = False
 
         return {
             # ===== lifecycle

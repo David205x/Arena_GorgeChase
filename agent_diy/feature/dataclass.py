@@ -135,7 +135,7 @@ class RawObs:
     # ========== current env
     step: int
     """env.reset() 后的首帧 step=0"""
-    legal_action: list[bool]
+    legal_action: list[int]
     map_view: np.ndarray
     hero: Hero
     monsters: list[Monster]
@@ -171,7 +171,7 @@ class RawObs:
 
         return cls(
             step=int(env_obs["step_no"]),
-            legal_action=[bool(v) for v in env_obs["legal_action"]],
+            legal_action=[int(v) for v in env_obs["legal_action"]],
             map_view=np.asarray(env_obs["map_info"], dtype=np.int8),
             hero=Hero.from_env(frame_state["heroes"]),
             monsters=[Monster.from_env(d) for d in frame_state["monsters"]],
@@ -259,7 +259,6 @@ class ActionPredict:
     flash_valid_mask: list[bool] = field(default_factory=lambda: [False] * 8)
     flash_distance: list[float] = field(default_factory=lambda: [0.0] * 8)
     flash_across_wall: list[bool] = field(default_factory=lambda: [False] * 8)
-    action_preferred: list[bool] = field(default_factory=list)
 
 
 @dataclass(slots=True)

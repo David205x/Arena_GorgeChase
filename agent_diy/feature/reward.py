@@ -26,8 +26,8 @@ from agent_diy.feature.dataclass import (
 # ======================== helpers ========================
 
 # --- 4.5  explore: treasure / buff approach ---
-W_TREASURE_APPROACH      = 0.010
-W_BUFF_APPROACH          = 0.008
+W_TREASURE_APPROACH      = 0.10
+W_BUFF_APPROACH          = 0.08
 TREASURE_APPROACH_CLIP   = 5.0
 BUFF_APPROACH_CLIP       = 5.0
 RESOURCE_NEAR_BUCKET_MAX = 1
@@ -59,12 +59,12 @@ def _resource_distance_gain(distance: int | float | None) -> float:
 # ======================== tunable weights ========================
 
 # --- 4.3  env raw score ---
-W_STEP_SCORE             = 1.0 / 50.0
-W_TREASURE_SCORE         = 1.0 / 50.0
+W_STEP_SCORE             = 1.0 / 10.0
+W_TREASURE_SCORE         = 1.0 / 10.0
 
 # --- 4.4  survival: monster distance ---
 SAFE_DIST                = 20.0
-W_DIST_DELTA             = 0.015
+W_DIST_DELTA             = 0.05
 DIST_DELTA_CLIP          = 5.0
 
 # --- 4.4  survival: encirclement ---
@@ -72,7 +72,7 @@ ENCIRCLE_AVG_SAFE        = 50.0
 W_ENCIRCLE               = 0.020
 
 # --- 4.4  survival: traversable space ---
-W_SPACE_DELTA            = 0.001
+W_SPACE_DELTA            = 0.01
 SPACE_DELTA_CLIP         = 10.0
 
 # --- 4.4  survival: dangerous topology ---
@@ -89,8 +89,8 @@ LOW_FLASH_RATIO          = 0.4
 LOW_FLASH_PEN            = -0.2
 FLASH_ESCAPE_BONUS       = 0.06
 FLASH_ACROSS_WALL_BONUS  = 0.1
-VISIT_THRESH             = 5
-W_REVISIT                = 0.1
+VISIT_THRESH             = 6
+W_REVISIT                = 0.02
 REVISIT_CAP              = 0.1
 
 # --- 4.7  terminal ---

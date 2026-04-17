@@ -6,7 +6,6 @@ MAX_MONSTER_SPEED = 5       # 怪物速度上限
 MAX_DIST_BUCKET = 5         # 最大距离桶取值
 MAX_BUFF_DURATION = 50      # 最大BUFF持续时间
 MAX_FLASH_DIST = 10         # 最大闪现距离
-MAX_PATH_DIST = 200         # 最大路径长度
 MAX_L2_DIST = 182.0         # 最大L2距离
 TOTAL_TREASURE_SLOTS = 10   # 宝箱槽位上限
 TOTAL_BUFF_SLOTS = 3        # BUFF槽位上限
@@ -34,12 +33,11 @@ def _encode_monster_dist(is_in_view: bool, chebyshev_dist, bucket) -> float:
     return 1.0
 
 
-def _safe_dist(path_d, l2_d) -> float:
-    """优先取路径距离，不可用时退 L2，都没有返回 1.0。"""
-    d = path_d if path_d is not None else l2_d
-    if d is None:
+def _safe_l2_dist(l2_d) -> float:
+    """仅使用 L2 距离；缺失时返回 1.0。"""
+    if l2_d is None:
         return 1.0
-    return _norm(d, MAX_PATH_DIST)
+    return _norm(l2_d, MAX_L2_DIST)
 
 
 # ======================== scalar obs dimension breakdown ========================
@@ -136,12 +134,12 @@ def construct_obs_scaler(data: dict) -> np.ndarray:
         rs.treasure_progress,
         float(rs.nearest_known_treasure_direction[0]),
         float(rs.nearest_known_treasure_direction[1]),
-        _safe_dist(rs.nearest_known_treasure_distance_path, rs.nearest_known_treasure_distance_l2),
+        _safe_l2_dist(rs.nearest_known_treasure_distance_l2),
         _norm(rs.buff_discovered_count, raw.total_buff) if raw.total_buff > 0 else 0.0,
         rs.buff_progress,
         float(rs.nearest_known_buff_direction[0]),
         float(rs.nearest_known_buff_direction[1]),
-        _safe_dist(rs.nearest_known_buff_distance_path, rs.nearest_known_buff_distance_l2),
+        _safe_l2_dist(rs.nearest_known_buff_distance_l2),
     ]  # 10
 
     treasure_full: dict[int, Organ | None] = data.get("treasure_full", {})
@@ -163,18 +161,19 @@ def construct_obs_scaler(data: dict) -> np.ndarray:
 
     buff_full: dict[int, Organ | None] = data.get("buff_full", {})
     sorted_buff_keys = sorted(buff_full.keys())
+    cooldown_max = max(int(raw.buff_refresh_time), 1)
     buff_slot_vec: list[float] = []
     for i in range(TOTAL_BUFF_SLOTS):
         b = buff_full.get(sorted_buff_keys[i]) if i < len(sorted_buff_keys) else None
         if b is None:
-            buff_slot_vec += [0.0, 0.0, 0.0, 0.0]
+            buff_slot_vec += [-1.0, 0.0, 0.0, 0.0]
         else:
             if b.status == 1 and b.cooldown == 0:
                 status_val = 1.0
             elif b.cooldown > 0:
-                status_val = 0.5
+                status_val = float(np.clip(1.0 - (b.cooldown / cooldown_max), 0.0, 1.0))
             else:
-                status_val = 0.25
+                status_val = 0.0
             d = distance_l2(hero.x, hero.z, b.x, b.z)
             buff_slot_vec += [
                 status_val,
